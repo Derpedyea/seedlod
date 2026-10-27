@@ -15,9 +15,14 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import me.cortex.voxy.common.world.WorldEngine;
@@ -33,6 +38,7 @@ import me.cortex.voxy.common.world.WorldEngine;
 final class Session {
 	private static final int FILE_VERSION = 3;
 	private static final int REPLAN_DISTANCE = 128;
+	private static final boolean DEBUG = Boolean.getBoolean("seedlod.debug");
 
 	private record Job(int lvl, int groupX, int groupZ, long priority) implements Comparable<Job> {
 		@Override
@@ -59,6 +65,10 @@ final class Session {
 	private volatile boolean stopped;
 	private boolean dirty;
 	private double planX = Double.NaN, planZ = Double.NaN;
+	/** Plans and saves, one at a time and off the render thread: a plan walks every group in range. */
+	private final ExecutorService housekeeping =
+		Executors.newSingleThreadExecutor(task -> Thread.ofPlatform().name("seedlod-plan").daemon().unstarted(task));
+	private final AtomicBoolean planning = new AtomicBoolean();
 
 	/** @param canWrite Voxy's save-queue limiter: we hold off while it's behind, as its own importers do */
 	Session(WorldgenView view, WorldEngine engine, long seed, Path doneFile, SeedLodConfig config, BooleanSupplier canWrite) {
@@ -79,10 +89,34 @@ final class Session {
 
 	/** Called every client tick with the camera position; {@code rule} is only asked for when replanning. */
 	void tick(double x, double z, Supplier<DetailRule> rule) {
-		if (Double.isNaN(this.planX) || Math.abs(x - this.planX) > REPLAN_DISTANCE || Math.abs(z - this.planZ) > REPLAN_DISTANCE) {
-			this.planX = x;
-			this.planZ = z;
-			this.plan((int) x, (int) z, rule.get());
+		boolean moved = Double.isNaN(this.planX) || Math.abs(x - this.planX) > REPLAN_DISTANCE || Math.abs(z - this.planZ) > REPLAN_DISTANCE;
+		if (!moved || !this.planning.compareAndSet(false, true)) return;
+		this.planX = x;
+		this.planZ = z;
+		DetailRule current = rule.get();  // reads the window and options, so here on the render thread
+		this.housekeep(() -> {
+			try {
+				long start = System.nanoTime();
+				this.plan((int) x, (int) z, current);
+				if (DEBUG) SeedLod.LOG.info("Planned {} jobs in {} ms", this.queue.size(), (System.nanoTime() - start) / 1_000_000);
+			} catch (RuntimeException e) {
+				SeedLod.LOG.error("Planning failed", e);
+			} finally {
+				this.planning.set(false);
+			}
+		});
+	}
+
+	/** Saves on the housekeeping thread, after any plan in progress. */
+	void saveSoon() {
+		this.housekeep(this::saveIfDirty);
+	}
+
+	private void housekeep(Runnable task) {
+		try {
+			this.housekeeping.execute(task);
+		} catch (RejectedExecutionException e) {
+			// Stopped meanwhile (stop() can run on the network thread when disconnecting): nothing left to do.
 		}
 	}
 
@@ -265,7 +299,7 @@ final class Session {
 	}
 
 	boolean idle() {
-		return !Double.isNaN(this.planX) && this.queue.isEmpty() && this.busy.get() == 0;
+		return !Double.isNaN(this.planX) && !this.planning.get() && this.queue.isEmpty() && this.busy.get() == 0;
 	}
 
 	void forget() {
@@ -341,6 +375,12 @@ final class Session {
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}
+		}
+		this.housekeeping.shutdown();
+		try {
+			this.housekeeping.awaitTermination(10, TimeUnit.SECONDS);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
 		}
 		this.saveIfDirty();
 		this.engine.releaseRef();

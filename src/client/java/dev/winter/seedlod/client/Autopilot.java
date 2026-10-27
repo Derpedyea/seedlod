@@ -79,6 +79,11 @@ final class Autopilot {
 			case "trees" -> SeedLod.LOG.info("[autopilot] trees:{}", session == null ? "no session" : session.trees());
 			case "shot" -> Screenshot.grab(mc.gameDirectory, arg + ".png", mc.gameRenderer.mainRenderTarget(), 1,
 				message -> SeedLod.LOG.info("[autopilot] {}", message.getString()));
+			// Like frames, but the script carries on meanwhile (to measure while moving).
+			case "watch" -> {
+				FrameStats.reset();
+				this.framesUntil = System.currentTimeMillis() + (long) (Double.parseDouble(arg) * 1000);
+			}
 			case "frames" -> {
 				FrameStats.reset();
 				this.framesUntil = System.currentTimeMillis() + (long) (Double.parseDouble(arg) * 1000);

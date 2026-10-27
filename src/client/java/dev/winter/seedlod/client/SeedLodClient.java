@@ -69,7 +69,7 @@ public final class SeedLodClient implements ClientModInitializer {
 		if (current == null || mc.gameRenderer.mainCamera() == null) return;
 		var pos = mc.gameRenderer.mainCamera().position();
 		current.tick(pos.x, pos.z, () -> DetailRule.current(mc, config));
-		if (++ticks % SAVE_INTERVAL_TICKS == 0) current.saveIfDirty();
+		if (++ticks % SAVE_INTERVAL_TICKS == 0) current.saveSoon();
 	}
 
 	private static void start(Minecraft mc, ClientLevel level) {
@@ -100,10 +100,7 @@ public final class SeedLodClient implements ClientModInitializer {
 
 		// On a server: wait for its seed, rebuild its worldgen, and only go ahead if a test tile comes out the same.
 		CompletableFuture<RebuiltWorldgen> rebuilt = remote;
-		if (rebuilt == null) {
-			sessionLevel = null;  // seed not here yet; it's sent right after joining
-			return;
-		}
+		if (rebuilt == null) return;  // seed not here yet: onSeed starts over when it arrives (a plain server never sends one)
 		rebuilt.thenApplyAsync(worldgen -> {
 			WorldgenView view = worldgen.view(dimension, level);
 			if (view == null) return null;
