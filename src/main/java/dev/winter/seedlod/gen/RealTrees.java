@@ -6,6 +6,7 @@ import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -125,17 +126,22 @@ public final class RealTrees {
 		}
 	}
 
+	private static final int UNKNOWN = Integer.MIN_VALUE;
+
 	/** The level features see: the tile's voxels in block coordinates, and nothing outside it. */
 	private final class Stage implements InvocationHandler {
 		final Tile area;
-		final int step, minX, minZ, span;
+		final int step, shift, minX, minZ, span;
 		final BiomeManager biomes;
 		final RandomSource random = RandomSource.create(0);
 		final WorldGenLevel level;
+		/** Cached {@link #height} per heightmap type and column. */
+		final int[][] tops = new int[Heightmap.Types.values().length][];
 
 		Stage(Tile area, BiomeManager biomes) {
 			this.area = area;
 			this.step = 1 << area.lvl;
+			this.shift = area.lvl;
 			this.minX = area.voxelX * this.step;
 			this.minZ = area.voxelZ * this.step;
 			this.span = area.size * this.step;
@@ -145,14 +151,14 @@ public final class RealTrees {
 
 		/** Column index for block x, z, or -1 outside the tile. */
 		int column(int x, int z) {
-			int vx = Math.floorDiv(x - this.minX, this.step), vz = Math.floorDiv(z - this.minZ, this.step);
+			int vx = (x - this.minX) >> this.shift, vz = (z - this.minZ) >> this.shift;  // floorDiv by step
 			return vx < 0 || vz < 0 || vx >= this.area.size || vz >= this.area.size ? -1 : vx + vz * this.area.size;
 		}
 
 		/** Voxel index for a block, or -1 outside the tile. */
 		int index(BlockPos pos) {
 			int column = this.column(pos.getX(), pos.getZ());
-			int vy = Math.floorDiv(pos.getY(), this.step) - this.area.voxelMinY;
+			int vy = (pos.getY() >> this.shift) - this.area.voxelMinY;
 			return column < 0 || vy < 0 || vy >= this.area.voxelsY ? -1 : vy + column * this.area.voxelsY;
 		}
 
@@ -177,6 +183,7 @@ public final class RealTrees {
 			}
 			this.area.states[index] = state.isAir() ? null : state;
 			this.area.light[index] = 15;
+			for (int[] tops : this.tops) if (tops != null) tops[index / this.area.voxelsY] = UNKNOWN;
 			return true;
 		}
 
@@ -184,13 +191,25 @@ public final class RealTrees {
 		int height(Heightmap.Types type, int x, int z) {
 			int column = this.column(x, z);
 			if (column < 0) return view.minY;
+			// Features ask for the same columns over and over; remember each answer until a block is set there.
+			int[] tops = this.tops[type.ordinal()];
+			if (tops == null) {
+				tops = this.tops[type.ordinal()] = new int[this.area.size * this.area.size];
+				Arrays.fill(tops, UNKNOWN);
+			}
+			int top = tops[column];
+			if (top != UNKNOWN) return top;
+			top = view.minY;
 			int base = column * this.area.voxelsY;
 			Predicate<BlockState> counts = type.isOpaque();
 			for (int y = this.area.voxelsY - 1; y >= 0; y--) {
 				BlockState state = this.area.states[base + y];
-				if (state != null && counts.test(state)) return (this.area.voxelMinY + y + 1) * this.step;
+				if (state != null && counts.test(state)) {
+					top = (this.area.voxelMinY + y + 1) * this.step;
+					break;
+				}
 			}
-			return view.minY;
+			return tops[column] = top;
 		}
 
 		@Override
