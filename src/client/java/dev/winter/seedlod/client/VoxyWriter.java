@@ -18,6 +18,8 @@ final class VoxyWriter {
 	private final LodTree.RealChunks real;
 	private final Map<BlockState, Integer> blockIds = new IdentityHashMap<>();
 	private final Map<Holder<Biome>, Integer> biomeIds = new IdentityHashMap<>();
+	/** One section being built; a writer belongs to one worker thread. */
+	private final long[] data = new long[LodTree.VOXELS];
 
 	VoxyWriter(WorldEngine engine) {
 		this.engine = engine;
@@ -57,7 +59,7 @@ final class VoxyWriter {
 	private void writeTile(Tile tile) {
 		int minSection = Math.floorDiv(tile.voxelMinY, 32);
 		int maxSection = Math.floorDiv(tile.voxelMinY + tile.voxelsY - 1, 32);
-		long[] data = new long[LodTree.VOXELS];
+		long[] data = this.data;
 		int highestSolid = Integer.MIN_VALUE;
 		for (int sy = minSection; sy <= maxSection; sy++) {
 			boolean blocks = this.build(tile, sy, data);
