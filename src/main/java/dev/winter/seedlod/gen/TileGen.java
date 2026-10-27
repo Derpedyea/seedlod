@@ -221,12 +221,12 @@ public final class TileGen implements AutoCloseable {
 					highestSolid = Math.max(highestSolid, y);
 				}
 			}
+			if (highestSolid < 0) return;
 			// One scout step of slack either side: the surface can sit anywhere between two scouts.
 			bandLo = Math.clamp((long) (lowestTop - 1) * scoutEvery, 0, voxelsY - 1);
 			bandHi = Math.clamp((long) (highestSolid + 2) * scoutEvery - 1, bandLo, voxelsY - 1);
 			for (int column = 0; column < tile.size * tile.size; column++)
 				for (int y = 0; y < bandLo; y++) solid[y + column * voxelsY] = true;
-			if (highestSolid < 0) return;
 		}
 		int bandSize = bandHi - bandLo + 1;
 		DensityVolume volume = new DensityVolume(
