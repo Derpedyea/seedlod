@@ -63,6 +63,11 @@ public final class LodTree {
 			return this.chunks.toLongArray();
 		}
 
+		/** After a failed save: what {@link #takeChanged} handed out still needs saving. */
+		synchronized void markChanged() {
+			this.changed = true;
+		}
+
 		synchronized long[] snapshot() {
 			return this.chunks.toLongArray();
 		}
@@ -148,11 +153,13 @@ public final class LodTree {
 		int childLvl = parent.lvl - 1;
 		byte existing = parent.getNonEmptyChildren();
 		byte added = 0;
-		long[] child = new long[VOXELS];
+		// Most calls (every real chunk section's path, once split) find nothing to do: allocate only when needed.
+		long[] child = null;
 		for (int o = 0; o < 8; o++) {
 			int ox = o & 1, oy = (o >> 2) & 1, oz = (o >> 1) & 1;
 			int bit = childBit(ox, oy, oz);
 			if ((octants & bit) == 0 || (existing & bit) != 0) continue;
+			if (child == null) child = new long[VOXELS];
 			int nonAir = upsample(source, ox, oy, oz, child);
 			if (nonAir == 0) continue;
 			WorldSection section = engine.acquire(childLvl, parent.x * 2 + ox, parent.y * 2 + oy, parent.z * 2 + oz);
@@ -184,13 +191,14 @@ public final class LodTree {
 	 * Voxy left around them, where it's ours, from {@code source} doubled up.
 	 */
 	public static void patchLevel0Children(WorldEngine engine, RealChunks real, WorldSection parent, long[] source, int octants) {
-		long[] child = new long[VOXELS];
+		long[] child = null;
 		for (int o = 0; o < 8; o++) {
 			int ox = o & 1, oy = (o >> 2) & 1, oz = (o >> 1) & 1;
 			if ((octants & childBit(ox, oy, oz)) == 0) continue;
 			WorldSection section = engine.acquireIfExists(0, parent.x * 2 + ox, parent.y * 2 + oy, parent.z * 2 + oz);
 			if (section == null) continue;
 			try {
+				if (child == null) child = new long[VOXELS];
 				upsample(source, ox, oy, oz, child);
 				long[] raw = section._unsafeGetRawDataArray();
 				boolean[] ours = ourColumns(real, 0, section.x, section.z, raw);

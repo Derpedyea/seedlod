@@ -1,6 +1,7 @@
 package dev.winter.seedlod.gen;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import java.util.Arrays;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.util.Mth;
@@ -19,6 +20,7 @@ import net.minecraft.world.level.levelgen.densityfunction.ScopedDensityBuffer;
 import net.minecraft.world.level.levelgen.densityfunction.op.InterpolatedFunction;
 import net.minecraft.world.level.levelgen.material.MaterialRuleContext;
 import net.minecraft.world.level.levelgen.material.rule.RuleEvaluator;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Turns a seed into LOD voxels by sampling the dimension's final density on a grid of {@code 1 << lvl} blocks and
@@ -46,6 +48,11 @@ public final class TileGen implements AutoCloseable {
 	private final TreePlanter planter;
 	private final RealTrees realTrees;
 	private boolean plantTrees = true;
+	/** Vanilla's interpolation cell in blocks (4x8x4 normally), or 0 if the density isn't interpolated. */
+	private final int cellXz, cellY;
+	/** Per-tile scratch, kept: a level 0 group's is megabytes, too big to allocate for every tile. */
+	private boolean[] solid = new boolean[0];
+	private int[] top = new int[0];
 
 	public TileGen(WorldgenView view) {
 		this.view = view;
@@ -54,6 +61,9 @@ public final class TileGen implements AutoCloseable {
 		DensitySamplerSet samplers = view.randomState.samplersWithContext(context);
 		this.exactDensity = samplers.get(view.settings.noiseRouter().finalDensity());
 		this.strideDensity = samplers.get(stripInterpolation(view.settings.noiseRouter().finalDensity()));
+		int[] cell = interpolationCell(view.settings.noiseRouter().finalDensity());
+		this.cellXz = cell[0];
+		this.cellY = cell[1];
 		this.biomes = view.biomes.createResolver(view.randomState.createClimateSampler(context));
 		// A single-block expected volume keeps rules that prefill a whole chunk (ore veins) from sampling anything up
 		// front; they fall back to sampling the few positions we actually ask about.
@@ -87,6 +97,23 @@ public final class TileGen implements AutoCloseable {
 			}
 		};
 		return rule.rewrite(function);
+	}
+
+	/** The cell of the first {@code interpolated} in the function, as {xz, y} blocks; {0, 0} if there's none. */
+	private static int[] interpolationCell(DensityFunction function) {
+		int[] cell = new int[2];
+		new DfRewriteRule() {
+			@Override
+			public DensityFunction rewrite(DensityFunction f) {
+				if (f instanceof DensityFunctions.HolderHolder(var holder)) f = holder.value();
+				if (f instanceof InterpolatedFunction interpolated && cell[0] == 0) {
+					cell[0] = interpolated.cellSizeXz();
+					cell[1] = interpolated.cellSizeY();
+				}
+				return f.rewriteChildren(this);
+			}
+		}.rewrite(function);
+		return cell;
 	}
 
 	public Tile generate(int lvl, int tileX, int tileZ) {
@@ -123,11 +150,14 @@ public final class TileGen implements AutoCloseable {
 		Tile tile = new Tile(lvl, voxelX, voxelZ, size, voxelMinY, voxelsY);
 		this.biomeCache.clear();
 
-		boolean[] solid = new boolean[size * size * voxelsY];
+		if (this.solid.length < size * size * voxelsY) this.solid = new boolean[size * size * voxelsY];
+		boolean[] solid = this.solid;
+		Arrays.fill(solid, 0, size * size * voxelsY, false);
 		this.sampleSolid(tile, solid, originX, originZ, step);
 
 		// Height of the top solid voxel per column, in blocks; feeds the rules' slope checks.
-		int[] top = new int[size * size];
+		if (this.top.length < size * size) this.top = new int[size * size];
+		int[] top = this.top;
 		for (int z = 0; z < size; z++) {
 			for (int x = 0; x < size; x++) {
 				int y = voxelsY - 1;
@@ -168,7 +198,14 @@ public final class TileGen implements AutoCloseable {
 		int voxelMinY = tile.voxelMinY, voxelsY = tile.voxelsY;
 		int bandLo = 0, bandHi = voxelsY - 1;
 		int scoutEvery = SCOUT_BLOCKS / step;
-		if (scoutEvery >= 2) {
+		if (tile.lvl <= EXACT_MAX_LEVEL && this.cellXz > 0) {
+			int[] band = this.scoutCells(tile, originX, originZ, step);
+			if (band == null) return;
+			bandLo = band[0];
+			bandHi = band[1];
+			for (int column = 0; column < tile.size * tile.size; column++)
+				for (int y = 0; y < bandLo; y++) solid[y + column * voxelsY] = true;
+		} else if (scoutEvery >= 2) {
 			int scouts = Math.ceilDiv(voxelsY, scoutEvery);
 			DensityVolume scout = new DensityVolume(
 				tile.size, scouts, tile.size, originX + half, voxelMinY * step + half, originZ + half, step, SCOUT_BLOCKS, step
@@ -184,12 +221,12 @@ public final class TileGen implements AutoCloseable {
 					highestSolid = Math.max(highestSolid, y);
 				}
 			}
+			if (highestSolid < 0) return;
 			// One scout step of slack either side: the surface can sit anywhere between two scouts.
 			bandLo = Math.clamp((long) (lowestTop - 1) * scoutEvery, 0, voxelsY - 1);
 			bandHi = Math.clamp((long) (highestSolid + 2) * scoutEvery - 1, bandLo, voxelsY - 1);
 			for (int column = 0; column < tile.size * tile.size; column++)
 				for (int y = 0; y < bandLo; y++) solid[y + column * voxelsY] = true;
-			if (highestSolid < 0) return;
 		}
 		int bandSize = bandHi - bandLo + 1;
 		DensityVolume volume = new DensityVolume(
@@ -199,6 +236,41 @@ public final class TileGen implements AutoCloseable {
 			for (int column = 0; column < tile.size * tile.size; column++)
 				for (int y = 0; y < bandSize; y++) solid[bandLo + y + column * voxelsY] = buffer.get(y + column * bandSize) > 0.0F;
 		}
+	}
+
+	/**
+	 * The scout for interpolated density: its cell corners, the only points it really evaluates. Asking for any other
+	 * stride makes it interpolate every block of the tile first. Interpolation can't rise above its corners, so the
+	 * topmost solid corner row bounds the surface to within a cell. Returns the band in voxels, or null if all air.
+	 */
+	private int @Nullable [] scoutCells(Tile tile, int originX, int originZ, int step) {
+		int half = step >> 1;
+		int minX = originX + half, maxX = originX + (tile.size - 1) * step + half;
+		int minZ = originZ + half, maxZ = originZ + (tile.size - 1) * step + half;
+		int minY = tile.voxelMinY * step + half, maxY = (tile.voxelMinY + tile.voxelsY - 1) * step + half;
+		int x0 = Math.floorDiv(minX, this.cellXz) * this.cellXz, z0 = Math.floorDiv(minZ, this.cellXz) * this.cellXz;
+		int y0 = Math.floorDiv(minY, this.cellY) * this.cellY;
+		int nx = Math.ceilDiv(maxX - x0, this.cellXz) + 1, nz = Math.ceilDiv(maxZ - z0, this.cellXz) + 1;
+		int ny = Math.ceilDiv(maxY - y0, this.cellY) + 1;
+		DensityVolume corners = new DensityVolume(nx, ny, nz, x0, y0, z0, this.cellXz, this.cellY, this.cellXz);
+		int lowestTop = Integer.MAX_VALUE, highestSolid = Integer.MIN_VALUE;
+		try (ScopedDensityBuffer buffer = this.exactDensity.sampleVolume(corners)) {
+			for (int z = 0; z < nz; z++)
+				for (int x = 0; x < nx; x++) {
+					int y = ny - 1;
+					while (y >= 0 && buffer.get(corners.indexUnchecked(x, y, z)) <= 0.0F) y--;
+					if (y < 0) continue;
+					lowestTop = Math.min(lowestTop, y);
+					highestSolid = Math.max(highestSolid, y);
+				}
+		}
+		if (highestSolid < 0) return null;
+		// Slack as the plain scout has: a scout step below the lowest top, and above the highest solid corner's cell.
+		int loBlock = y0 + lowestTop * this.cellY - SCOUT_BLOCKS;
+		int hiBlock = y0 + highestSolid * this.cellY + this.cellY + SCOUT_BLOCKS;
+		int bandLo = Math.clamp(Math.floorDiv(loBlock, step) - tile.voxelMinY, 0, tile.voxelsY - 1);
+		int bandHi = Math.clamp(Math.floorDiv(hiBlock, step) - tile.voxelMinY, bandLo, tile.voxelsY - 1);
+		return new int[]{bandLo, bandHi};
 	}
 
 	/** Mirrors vanilla's surface pass over one column, top down, in voxel steps. */

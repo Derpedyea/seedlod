@@ -12,6 +12,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.PriorityBlockingQueue;
@@ -284,9 +285,11 @@ final class Session {
 			keys = this.done.toLongArray();
 		}
 		if (realKeys == null) realKeys = this.real.snapshot();
+		// Written aside and moved over, so a failed write can't leave half a record behind.
+		Path temp = this.doneFile.resolveSibling(this.doneFile.getFileName() + ".tmp");
 		try {
 			Files.createDirectories(this.doneFile.getParent());
-			try (DataOutputStream out = new DataOutputStream(new java.io.BufferedOutputStream(Files.newOutputStream(this.doneFile)))) {
+			try (DataOutputStream out = new DataOutputStream(new java.io.BufferedOutputStream(Files.newOutputStream(temp)))) {
 				out.writeInt(FILE_VERSION);
 				out.writeLong(this.seed);
 				out.writeBoolean(this.real.complete);
@@ -295,8 +298,14 @@ final class Session {
 				out.writeInt(realKeys.length);
 				for (long key : realKeys) out.writeLong(key);
 			}
+			Files.move(temp, this.doneFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
 		} catch (IOException e) {
 			SeedLod.LOG.warn("Couldn't save {}", this.doneFile, e);
+			// Try again next time, rather than lose the real chunks (they'd be taken for ours after a restart).
+			this.real.markChanged();
+			synchronized (this.done) {
+				this.dirty = true;
+			}
 		}
 	}
 

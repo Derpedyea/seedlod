@@ -18,6 +18,8 @@ final class VoxyWriter {
 	private final LodTree.RealChunks real;
 	private final Map<BlockState, Integer> blockIds = new IdentityHashMap<>();
 	private final Map<Holder<Biome>, Integer> biomeIds = new IdentityHashMap<>();
+	/** One section being built; a writer belongs to one worker thread. */
+	private final long[] data = new long[LodTree.VOXELS];
 
 	VoxyWriter(WorldEngine engine) {
 		this.engine = engine;
@@ -28,12 +30,20 @@ final class VoxyWriter {
 	/** Writes a 2x2 group of tiles that share parents, so a parent never gains only some of its children. */
 	void writeGroup(Tile[] group) {
 		Tile first = group[0];
-		int lvl4X = first.tileX >> (WorldEngine.MAX_LOD_LAYER - first.lvl);
-		int lvl4Z = first.tileZ >> (WorldEngine.MAX_LOD_LAYER - first.lvl);
+		int shift = WorldEngine.MAX_LOD_LAYER - first.lvl;
+		if (shift == 0) {
+			// At the top level each tile is its own column (and has no parent to keep consistent).
+			for (Tile tile : group) this.writeLocked(tile.tileX, tile.tileZ, tile);
+			return;
+		}
+		this.writeLocked(first.tileX >> shift, first.tileZ >> shift, group);
+	}
+
+	private void writeLocked(int lvl4X, int lvl4Z, Tile... tiles) {
 		ReentrantLock lock = LodTree.lock(lvl4X, lvl4Z);
 		lock.lock();
 		try {
-			for (Tile tile : group) this.writeTile(tile);
+			for (Tile tile : tiles) this.writeTile(tile);
 		} finally {
 			lock.unlock();
 		}
@@ -49,7 +59,7 @@ final class VoxyWriter {
 	private void writeTile(Tile tile) {
 		int minSection = Math.floorDiv(tile.voxelMinY, 32);
 		int maxSection = Math.floorDiv(tile.voxelMinY + tile.voxelsY - 1, 32);
-		long[] data = new long[LodTree.VOXELS];
+		long[] data = this.data;
 		int highestSolid = Integer.MIN_VALUE;
 		for (int sy = minSection; sy <= maxSection; sy++) {
 			boolean blocks = this.build(tile, sy, data);
