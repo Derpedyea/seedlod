@@ -185,9 +185,11 @@ public final class TileGen implements AutoCloseable {
 	}
 
 	/**
-	 * Most of a column is sky or deep rock. A pass every {@link #SCOUT_BLOCKS} blocks finds the band holding the
-	 * tile's surface; only that band is sampled at full resolution, below it is solid, above it air. Anything thinner
-	 * than the scout step outside the band (a floating sliver) can be missed, which a LOD can live with.
+	 * Most of a column is sky or deep rock. A sparse pass, every {@link #SCOUT_BLOCKS} blocks each way, finds the band
+	 * holding the tile's surface; only that band is sampled at full resolution, below it is solid, above it air. A
+	 * column whose ground turns out to sit below the band, or to rise through its top, is followed down or up (see
+	 * {@link #extendBand}), so the scout's spacing costs nothing but time. Anything floating clear of the band (a
+	 * thin sliver of overhang) can be missed, which a LOD can live with.
 	 */
 	private void sampleSolid(Tile tile, boolean[] solid, int originX, int originZ, int step) {
 		// Interpolation only evaluates the noise at cell corners (every 4x8x4 blocks) and blends the rest, so at fine
@@ -207,13 +209,16 @@ public final class TileGen implements AutoCloseable {
 				for (int y = 0; y < bandLo; y++) solid[y + column * voxelsY] = true;
 		} else if (scoutEvery >= 2) {
 			int scouts = Math.ceilDiv(voxelsY, scoutEvery);
+			// Sideways too: one scout column per scoutEvery voxels (the last may land past the tile's edge).
+			int across = Math.ceilDiv(tile.size - 1, scoutEvery) + 1;
+			int spacing = scoutEvery * step;
 			DensityVolume scout = new DensityVolume(
-				tile.size, scouts, tile.size, originX + half, voxelMinY * step + half, originZ + half, step, SCOUT_BLOCKS, step
+				across, scouts, across, originX + half, voxelMinY * step + half, originZ + half, spacing, SCOUT_BLOCKS, spacing
 			);
 			// The band spans every column's topmost solid scout. Caves under that are left solid: nobody sees them.
 			int lowestTop = scouts, highestSolid = -1;
 			try (ScopedDensityBuffer buffer = density.sampleVolume(scout)) {
-				for (int column = 0; column < tile.size * tile.size; column++) {
+				for (int column = 0; column < across * across; column++) {
 					int y = scouts - 1;
 					while (y >= 0 && buffer.get(y + column * scouts) <= 0.0F) y--;
 					if (y < 0) continue;
@@ -236,6 +241,52 @@ public final class TileGen implements AutoCloseable {
 			for (int column = 0; column < tile.size * tile.size; column++)
 				for (int y = 0; y < bandSize; y++) solid[bandLo + y + column * voxelsY] = buffer.get(y + column * bandSize) > 0.0F;
 		}
+		this.extendBand(tile, solid, density, originX, originZ, step, bandLo, bandHi);
+	}
+
+	/**
+	 * Follows the columns the band cut short. No ground anywhere in the band means it lies lower (the scout stepped
+	 * over a valley): sample down until it's found. (Air at the band's bottom under ground that was found is a cave,
+	 * left solid like every cave under the band.) Solid at its top means terrain may carry on up: sample the rest of
+	 * the column.
+	 */
+	private void extendBand(Tile tile, boolean[] solid, DensitySampler.Bound density, int originX, int originZ, int step, int bandLo, int bandHi) {
+		int half = step >> 1;
+		int voxelsY = tile.voxelsY;
+		int chunk = Math.max(2, SCOUT_BLOCKS / step);
+		for (int column = 0; column < tile.size * tile.size; column++) {
+			int base = column * voxelsY;
+			int blockX = originX + (column % tile.size) * step + half, blockZ = originZ + (column / tile.size) * step + half;
+			if (bandLo > 0 && !anySolid(solid, base + bandLo, base + bandHi)) {
+				for (int top = bandLo - 1; top >= 0; ) {
+					int from = Math.max(0, top - chunk + 1);
+					boolean found = this.sampleColumn(tile, solid, density, blockX, blockZ, step, base, from, top);
+					if (found) break;
+					top = from - 1;
+				}
+			}
+			if (bandHi < voxelsY - 1 && solid[base + bandHi]) this.sampleColumn(tile, solid, density, blockX, blockZ, step, base, bandHi + 1, voxelsY - 1);
+		}
+	}
+
+	private static boolean anySolid(boolean[] solid, int from, int to) {
+		for (int i = to; i >= from; i--) if (solid[i]) return true;
+		return false;
+	}
+
+	/** Samples voxels {@code from..to} of one column into {@code solid}; true if any is solid. */
+	private boolean sampleColumn(Tile tile, boolean[] solid, DensitySampler.Bound density, int blockX, int blockZ, int step, int base, int from, int to) {
+		int count = to - from + 1;
+		DensityVolume volume = new DensityVolume(1, count, 1, blockX, (tile.voxelMinY + from) * step + (step >> 1), blockZ, step, step, step);
+		boolean any = false;
+		try (ScopedDensityBuffer buffer = density.sampleVolume(volume)) {
+			for (int y = 0; y < count; y++) {
+				boolean value = buffer.get(volume.indexUnchecked(0, y, 0)) > 0.0F;
+				solid[base + from + y] = value;
+				any |= value;
+			}
+		}
+		return any;
 	}
 
 	/**
