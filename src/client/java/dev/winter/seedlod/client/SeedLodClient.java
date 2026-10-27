@@ -69,7 +69,7 @@ public final class SeedLodClient implements ClientModInitializer {
 		if (current == null || mc.gameRenderer.mainCamera() == null) return;
 		var pos = mc.gameRenderer.mainCamera().position();
 		current.tick(pos.x, pos.z, () -> DetailRule.current(mc, config));
-		if (++ticks % SAVE_INTERVAL_TICKS == 0) current.saveIfDirty();
+		if (++ticks % SAVE_INTERVAL_TICKS == 0) current.saveSoon();
 	}
 
 	private static void start(Minecraft mc, ClientLevel level) {
