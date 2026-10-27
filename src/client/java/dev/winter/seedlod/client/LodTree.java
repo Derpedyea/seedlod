@@ -63,6 +63,11 @@ public final class LodTree {
 			return this.chunks.toLongArray();
 		}
 
+		/** After a failed save: what {@link #takeChanged} handed out still needs saving. */
+		synchronized void markChanged() {
+			this.changed = true;
+		}
+
 		synchronized long[] snapshot() {
 			return this.chunks.toLongArray();
 		}
