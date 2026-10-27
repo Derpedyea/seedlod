@@ -233,6 +233,11 @@ public final class TileGen implements AutoCloseable {
 			for (int column = 0; column < tile.size * tile.size; column++)
 				for (int y = 0; y < bandLo; y++) solid[y + column * voxelsY] = true;
 		}
+		if (this.cellXz == step && this.cellY > step && this.cellY % step == 0) {
+			this.sampleBandFromCorners(tile, solid, originX, originZ, step, bandLo, bandHi);
+			this.extendBand(tile, solid, this.exactDensity, originX, originZ, step, bandLo, bandHi);
+			return;
+		}
 		int bandSize = bandHi - bandLo + 1;
 		DensityVolume volume = new DensityVolume(
 			tile.size, bandSize, tile.size, originX + half, (voxelMinY + bandLo) * step + half, originZ + half, step, step, step
@@ -242,6 +247,37 @@ public final class TileGen implements AutoCloseable {
 				for (int y = 0; y < bandSize; y++) solid[bandLo + y + column * voxelsY] = buffer.get(y + column * bandSize) > 0.0F;
 		}
 		this.extendBand(tile, solid, density, originX, originZ, step, bandLo, bandHi);
+	}
+
+	/**
+	 * The band where a voxel is exactly one interpolation cell wide (lvl 2 with vanilla's 4x8x4): every voxel centre
+	 * sits midway between four corner columns, so the cell corners and a blend give what a chunk would have there, for
+	 * half the samples of evaluating each voxel.
+	 */
+	private void sampleBandFromCorners(Tile tile, boolean[] solid, int originX, int originZ, int step, int bandLo, int bandHi) {
+		int half = step >> 1;
+		int voxelsY = tile.voxelsY, size = tile.size;
+		int firstY = (tile.voxelMinY + bandLo) * step + half, lastY = (tile.voxelMinY + bandHi) * step + half;
+		int y0 = Math.floorDiv(firstY, this.cellY) * this.cellY;
+		int rows = Math.floorDiv(lastY - y0, this.cellY) + 2;
+		// Voxel x is cell x: corners at the voxel's two edges, originX + x * step and one step on.
+		DensityVolume corners = new DensityVolume(size + 1, rows, size + 1, originX, y0, originZ, step, this.cellY, step);
+		try (ScopedDensityBuffer buffer = this.exactDensity.sampleVolume(corners)) {
+			for (int z = 0; z < size; z++)
+				for (int x = 0; x < size; x++) {
+					int base = (x + z * size) * voxelsY;
+					for (int y = bandLo; y <= bandHi; y++) {
+						int blockY = (tile.voxelMinY + y) * step + half;
+						int cy = Math.floorDiv(blockY - y0, this.cellY);
+						float t = (float) (blockY - y0 - cy * this.cellY) / this.cellY;
+						float below = buffer.get(corners.indexUnchecked(x, cy, z)) + buffer.get(corners.indexUnchecked(x + 1, cy, z))
+							+ buffer.get(corners.indexUnchecked(x, cy, z + 1)) + buffer.get(corners.indexUnchecked(x + 1, cy, z + 1));
+						float above = buffer.get(corners.indexUnchecked(x, cy + 1, z)) + buffer.get(corners.indexUnchecked(x + 1, cy + 1, z))
+							+ buffer.get(corners.indexUnchecked(x, cy + 1, z + 1)) + buffer.get(corners.indexUnchecked(x + 1, cy + 1, z + 1));
+						solid[base + y] = below + (above - below) * t > 0.0F;
+					}
+				}
+		}
 	}
 
 	/**
