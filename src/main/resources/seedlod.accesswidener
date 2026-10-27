@@ -1,0 +1,6 @@
+accessWidener v2 official
+
+# The surface pass is package-private; we run it over our own coarse columns instead of a proto chunk.
+accessible method net/minecraft/world/level/levelgen/material/MaterialRuleContext <init> (Lnet/minecraft/world/level/levelgen/material/MaterialSystem;Lnet/minecraft/world/level/levelgen/RandomState;Lnet/minecraft/world/level/levelgen/densityfunction/DensityVolume;Lnet/minecraft/world/level/levelgen/densityfunction/DensitySamplerSet;Ljava/util/function/Function;Lnet/minecraft/world/level/levelgen/WorldGenerationContext;Ljava/util/Set;)V
+accessible method net/minecraft/world/level/levelgen/material/MaterialRuleContext updateXZ (IIII)V
+accessible method net/minecraft/world/level/levelgen/material/MaterialRuleContext updateY (IIII)V

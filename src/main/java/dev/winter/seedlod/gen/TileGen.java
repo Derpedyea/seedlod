@@ -1,0 +1,276 @@
+package dev.winter.seedlod.gen;
+
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.BiomeResolver;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.densityfunction.DensityBufferPool;
+import net.minecraft.world.level.levelgen.densityfunction.DensityFunction;
+import net.minecraft.world.level.levelgen.densityfunction.DensitySampler;
+import net.minecraft.world.level.levelgen.densityfunction.DensitySamplerSet;
+import net.minecraft.world.level.levelgen.densityfunction.DensityVolume;
+import net.minecraft.world.level.levelgen.densityfunction.DfRewriteRule;
+import net.minecraft.world.level.levelgen.densityfunction.DensityFunctions;
+import net.minecraft.world.level.levelgen.densityfunction.SamplerContext;
+import net.minecraft.world.level.levelgen.densityfunction.ScopedDensityBuffer;
+import net.minecraft.world.level.levelgen.densityfunction.op.InterpolatedFunction;
+import net.minecraft.world.level.levelgen.material.MaterialRuleContext;
+import net.minecraft.world.level.levelgen.material.rule.RuleEvaluator;
+
+/**
+ * Turns a seed into LOD voxels by sampling the dimension's final density on a grid of {@code 1 << lvl} blocks and
+ * running its material rules on the surface. One per thread: it owns sampler caches and a compiled rule.
+ */
+public final class TileGen implements AutoCloseable {
+	/**
+	 * Rules only decide the blocks this close to a surface; deeper solid voxels are the default block. Vanilla's
+	 * soil layers reach about this deep, and anything below is out of sight from afar.
+	 */
+	private static final int RULE_DEPTH_BLOCKS = 9;
+	private static final int SCOUT_BLOCKS = 16;
+	private static final int EXACT_MAX_LEVEL = 1;
+
+	private final WorldgenView view;
+	private final DensityBufferPool bufferPool;
+	/** Up to {@link #EXACT_MAX_LEVEL}: vanilla's own density, interpolated between cell corners exactly as chunks are. */
+	private final DensitySampler.Bound exactDensity;
+	/** Coarser: interpolation stripped, sampled straight at the voxel stride. */
+	private final DensitySampler.Bound strideDensity;
+	private final BiomeResolver biomes;
+	private final MaterialRuleContext ruleContext;
+	private final RuleEvaluator rule;
+	private final BiomeCache biomeCache = new BiomeCache();
+	private final TreePlanter planter;
+	private final RealTrees realTrees;
+	private boolean plantTrees = true;
+
+	public TileGen(WorldgenView view) {
+		this.view = view;
+		this.bufferPool = view.randomState.acquireDensityBufferPool();
+		SamplerContext context = SamplerContext.builder().useBufferArena(this.bufferPool).enableCaches().build();
+		DensitySamplerSet samplers = view.randomState.samplersWithContext(context);
+		this.exactDensity = samplers.get(view.settings.noiseRouter().finalDensity());
+		this.strideDensity = samplers.get(stripInterpolation(view.settings.noiseRouter().finalDensity()));
+		this.biomes = view.biomes.createResolver(view.randomState.createClimateSampler(context));
+		// A single-block expected volume keeps rules that prefill a whole chunk (ore veins) from sampling anything up
+		// front; they fall back to sampling the few positions we actually ask about.
+		this.ruleContext = new MaterialRuleContext(
+			view.randomState.surfaceSystem(), view.randomState, new DensityVolume(1, 1, 1, 0, 0, 0), samplers,
+			pos -> this.biomeCache.get(pos), view.genContext, null
+		);
+		this.rule = view.settings.materialRule().value().compile(this.ruleContext);
+		this.planter = new TreePlanter(view.trees, view.randomState.seed());
+		this.realTrees = new RealTrees(view);
+	}
+
+	/** Terrain only; trees come from data a server may not share identically with its clients. */
+	TileGen withoutTrees() {
+		this.plantTrees = false;
+		return this;
+	}
+
+	/**
+	 * Vanilla wraps terrain in {@code interpolated}, which only samples cheaply at its own cell size; at any other
+	 * stride it samples every block and picks out the ones asked for. Sampling the input directly at our stride is
+	 * what a LOD wants anyway.
+	 */
+	static DensityFunction stripInterpolation(DensityFunction function) {
+		DfRewriteRule rule = new DfRewriteRule() {
+			@Override
+			public DensityFunction rewrite(DensityFunction f) {
+				if (f instanceof DensityFunctions.HolderHolder(var holder)) f = holder.value();
+				if (f instanceof InterpolatedFunction interpolated) return this.rewrite(interpolated.input());
+				return f.rewriteChildren(this);
+			}
+		};
+		return rule.rewrite(function);
+	}
+
+	public Tile generate(int lvl, int tileX, int tileZ) {
+		Tile tile = this.terrain(lvl, tileX * Tile.SIZE, tileZ * Tile.SIZE, Tile.SIZE);
+		if (this.plantTrees) this.planter.plant(tile, tile.voxelX << lvl, tile.voxelZ << lvl, 1 << lvl);
+		return tile;
+	}
+
+	/**
+	 * The 2x2 tiles of a group (they're written together). Up to {@link RealTrees#MAX_LEVEL} the group is generated
+	 * with a margin wide enough for trees standing just outside to reach in, and grows vanilla's own trees.
+	 */
+	public Tile[] generateGroup(int lvl, int groupX, int groupZ) {
+		Tile[] group = new Tile[4];
+		if (lvl > RealTrees.MAX_LEVEL || !this.plantTrees) {
+			for (int i = 0; i < 4; i++) group[i] = this.generate(lvl, groupX * 2 + (i & 1), groupZ * 2 + (i >> 1));
+			return group;
+		}
+		int margin = RealTrees.MARGIN >> lvl;
+		Tile area = this.terrain(lvl, groupX * 2 * Tile.SIZE - margin, groupZ * 2 * Tile.SIZE - margin, 2 * Tile.SIZE + 2 * margin);
+		this.realTrees.plant(area, this.biomes);
+		for (int i = 0; i < 4; i++) group[i] = area.cut(groupX * 2 + (i & 1), groupZ * 2 + (i >> 1));
+		return group;
+	}
+
+	private Tile terrain(int lvl, int voxelX, int voxelZ, int size) {
+		int step = 1 << lvl;
+		int half = step >> 1;
+		int originX = voxelX * step;
+		int originZ = voxelZ * step;
+		int voxelMinY = Math.floorDiv(this.view.minY, step);
+		int voxelMaxY = Math.ceilDiv(this.view.minY + this.view.height, step);
+		int voxelsY = voxelMaxY - voxelMinY;
+		Tile tile = new Tile(lvl, voxelX, voxelZ, size, voxelMinY, voxelsY);
+		this.biomeCache.clear();
+
+		boolean[] solid = new boolean[size * size * voxelsY];
+		this.sampleSolid(tile, solid, originX, originZ, step);
+
+		// Height of the top solid voxel per column, in blocks; feeds the rules' slope checks.
+		int[] top = new int[size * size];
+		for (int z = 0; z < size; z++) {
+			for (int x = 0; x < size; x++) {
+				int y = voxelsY - 1;
+				while (y >= 0 && !solid[tile.index(x, y, z)]) y--;
+				top[x + z * size] = y < 0 ? this.view.minY : (voxelMinY + y) * step + step - 1;
+			}
+		}
+
+		for (int z = 0; z < size; z++) {
+			int blockZ = originZ + z * step + half;
+			for (int x = 0; x < size; x++) {
+				int blockX = originX + x * step + half;
+				int column = x + z * size;
+				int surfaceY = Math.max(top[column], this.view.seaLevel - 1);
+				Holder<Biome> biome = this.biomeCache.surface(blockX, surfaceY, blockZ);
+				tile.biomes[column] = biome;
+
+				int gradientX = (top[Math.min(x + 1, size - 1) + z * size] - top[Math.max(x - 1, 0) + z * size]) / step;
+				int gradientZ = (top[x + Math.min(z + 1, size - 1) * size] - top[x + Math.max(z - 1, 0) * size]) / step;
+				this.ruleContext.updateXZ(blockX, blockZ, gradientX, gradientZ);
+				this.fillColumn(tile, solid, x, z, blockX, blockZ, step);
+			}
+		}
+		return tile;
+	}
+
+	/**
+	 * Most of a column is sky or deep rock. A pass every {@link #SCOUT_BLOCKS} blocks finds the band holding the
+	 * tile's surface; only that band is sampled at full resolution, below it is solid, above it air. Anything thinner
+	 * than the scout step outside the band (a floating sliver) can be missed, which a LOD can live with.
+	 */
+	private void sampleSolid(Tile tile, boolean[] solid, int originX, int originZ, int step) {
+		// Interpolation only evaluates the noise at cell corners (every 4x8x4 blocks) and blends the rest, so at fine
+		// strides it's both what chunks look like and far cheaper than evaluating every voxel. At coarse strides the
+		// blend would be done for every block underneath, so there the noise is sampled at the voxels directly.
+		DensitySampler.Bound density = tile.lvl <= EXACT_MAX_LEVEL ? this.exactDensity : this.strideDensity;
+		int half = step >> 1;
+		int voxelMinY = tile.voxelMinY, voxelsY = tile.voxelsY;
+		int bandLo = 0, bandHi = voxelsY - 1;
+		int scoutEvery = SCOUT_BLOCKS / step;
+		if (scoutEvery >= 2) {
+			int scouts = Math.ceilDiv(voxelsY, scoutEvery);
+			DensityVolume scout = new DensityVolume(
+				tile.size, scouts, tile.size, originX + half, voxelMinY * step + half, originZ + half, step, SCOUT_BLOCKS, step
+			);
+			// The band spans every column's topmost solid scout. Caves under that are left solid: nobody sees them.
+			int lowestTop = scouts, highestSolid = -1;
+			try (ScopedDensityBuffer buffer = density.sampleVolume(scout)) {
+				for (int column = 0; column < tile.size * tile.size; column++) {
+					int y = scouts - 1;
+					while (y >= 0 && buffer.get(y + column * scouts) <= 0.0F) y--;
+					if (y < 0) continue;
+					lowestTop = Math.min(lowestTop, y);
+					highestSolid = Math.max(highestSolid, y);
+				}
+			}
+			// One scout step of slack either side: the surface can sit anywhere between two scouts.
+			bandLo = Math.clamp((long) (lowestTop - 1) * scoutEvery, 0, voxelsY - 1);
+			bandHi = Math.clamp((long) (highestSolid + 2) * scoutEvery - 1, bandLo, voxelsY - 1);
+			for (int column = 0; column < tile.size * tile.size; column++)
+				for (int y = 0; y < bandLo; y++) solid[y + column * voxelsY] = true;
+			if (highestSolid < 0) return;
+		}
+		int bandSize = bandHi - bandLo + 1;
+		DensityVolume volume = new DensityVolume(
+			tile.size, bandSize, tile.size, originX + half, (voxelMinY + bandLo) * step + half, originZ + half, step, step, step
+		);
+		try (ScopedDensityBuffer buffer = density.sampleVolume(volume)) {
+			for (int column = 0; column < tile.size * tile.size; column++)
+				for (int y = 0; y < bandSize; y++) solid[bandLo + y + column * voxelsY] = buffer.get(y + column * bandSize) > 0.0F;
+		}
+	}
+
+	/** Mirrors vanilla's surface pass over one column, top down, in voxel steps. */
+	private void fillColumn(Tile tile, boolean[] solid, int x, int z, int blockX, int blockZ, int step) {
+		int half = step >> 1;
+		int stoneAbove = 0;
+		int waterHeight = Integer.MIN_VALUE;
+		int ceilingY = Integer.MAX_VALUE;
+		for (int y = tile.voxelsY - 1; y >= 0; y--) {
+			int index = tile.index(x, y, z);
+			int blockY = (tile.voxelMinY + y) * step + half;
+			if (!solid[index]) {
+				stoneAbove = 0;
+				if (blockY < this.view.seaLevel) {
+					if (waterHeight == Integer.MIN_VALUE) waterHeight = Math.min(this.view.seaLevel, (tile.voxelMinY + y + 1) * step);
+					tile.states[index] = this.view.defaultFluid;
+					// Light at the voxel's top, so the surface voxel is fully lit however coarse the level.
+					tile.light[index] = (byte) Mth.clamp(15 - (waterHeight - (tile.voxelMinY + y + 1) * step), 0, 15);
+				} else {
+					waterHeight = Integer.MIN_VALUE;
+					tile.light[index] = 15;
+				}
+				continue;
+			}
+
+			if (ceilingY >= y) {
+				int below = y - 1;
+				while (below >= 0 && solid[tile.index(x, below, z)]) below--;
+				ceilingY = below + 1;
+			}
+			int depthAbove = stoneAbove == 0 ? 1 : 1 + stoneAbove * step;
+			int depthBelow = (y - ceilingY) * step + 1;
+			stoneAbove++;
+
+			BlockState state = null;
+			if (depthAbove <= RULE_DEPTH_BLOCKS || depthBelow <= RULE_DEPTH_BLOCKS) {
+				this.ruleContext.updateY(depthAbove, depthBelow, waterHeight, blockY);
+				state = this.rule.tryApply(blockX, blockY, blockZ);
+			}
+			tile.states[index] = state != null ? state : this.view.defaultBlock;
+		}
+	}
+
+	@Override
+	public void close() {
+		this.view.randomState.releaseDensityBufferPool(this.bufferPool);
+	}
+
+	/**
+	 * Rules ask for the biome per block. Far terrain only shows the surface, so every block of a column gets its
+	 * surface biome, looked up once per quart column (4x4 blocks), as vanilla's biome storage is laid out.
+	 */
+	private final class BiomeCache {
+		private final Long2ObjectOpenHashMap<Holder<Biome>> quarts = new Long2ObjectOpenHashMap<>();
+		private Holder<Biome> column;
+
+		void clear() {
+			this.quarts.clear();
+		}
+
+		Holder<Biome> surface(int blockX, int surfaceY, int blockZ) {
+			long key = (long) (blockX >> 2) << 32 | ((blockZ >> 2) & 0xFFFFFFFFL);
+			Holder<Biome> biome = this.quarts.get(key);
+			if (biome == null) {
+				biome = TileGen.this.biomes.getNoiseBiome(blockX >> 2, surfaceY >> 2, blockZ >> 2);
+				this.quarts.put(key, biome);
+			}
+			return this.column = biome;
+		}
+
+		Holder<Biome> get(BlockPos pos) {
+			return this.column;
+		}
+	}
+}

@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.winter.seedlod.client.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["DebugOverlayMixin", "FallenTreeFeatureMixin", "NodeManagerMixin", "StreamsSettingsMixin", "WorldUpdaterMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

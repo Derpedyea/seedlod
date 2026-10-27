@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "seedlod",
+  "version": "${version}",
+  "name": "Seed LOD",
+  "description": "Builds Voxy's distant terrain from the world seed, without generating chunks.",
+  "authors": ["Winter server"],
+  "license": "All-Rights-Reserved",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["dev.winter.seedlod.SeedLod"],
+    "client": ["dev.winter.seedlod.client.SeedLodClient"]
+  },
+  "mixins": [{ "config": "seedlod.client.mixins.json", "environment": "client" }],
+  "accessWidener": "seedlod.accesswidener",
+  "depends": {
+    "fabricloader": ">=0.20",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  },
+  "suggests": { "voxy": "*" }
+}
