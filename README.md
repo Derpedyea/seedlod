@@ -3,6 +3,9 @@
 Fills Voxy's distant terrain straight from the world seed, without generating chunks. Written from scratch for the
 Winter server pack (Minecraft 26.3, Fabric).
 
+Inspired by [Voxy SeedGen](https://www.curseforge.com/minecraft/mc-mods/voxy-seedgen) by Mobiusmeansbusiness, which
+does the same from the seed but isn't open source. Seed LOD is an open-source take on the idea.
+
 ## How it works
 
 - Samples the dimension's own `final_density` on a grid of 1 to 16 blocks per voxel, so datapack and mod terrain
