@@ -38,3 +38,8 @@ only starts if a test tile matches the server's exactly. Players without the mod
 ## Build
 
 `./gradlew build`. Voxy and Sodium aren't on a maven: copy their jars from the pack into `libs/` (see `build.gradle`).
+
+## License
+
+[MIT](LICENSE). Voxy and Sodium are all rights reserved and aren't included; the build only compiles against
+your own copies.
