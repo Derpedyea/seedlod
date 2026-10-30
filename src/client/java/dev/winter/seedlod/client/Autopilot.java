@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import me.cortex.voxy.client.RenderStatistics;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import org.jspecify.annotations.Nullable;
@@ -14,7 +15,8 @@ import org.jspecify.annotations.Nullable;
  * Dev tool for testing without a person at the keyboard, on with {@code -Dseedlod.autopilot=<script>}. Once in a
  * world it runs the script's lines in order:
  * {@code cmd <command>}, {@code sleep <seconds>}, {@code idle} (wait for generation to finish),
- * {@code status}, {@code shot <name>}, {@code frames <seconds>} (frame time stats over that long), {@code quit}.
+ * {@code status}, {@code shot <name>}, {@code frames <seconds>} (frame time stats over that long),
+ * {@code lods} (sections Voxy draws per level), {@code quit}.
  */
 final class Autopilot {
 	private final Deque<String> lines = new ArrayDeque<>();
@@ -30,6 +32,8 @@ final class Autopilot {
 		String path = System.getProperty("seedlod.autopilot");
 		if (path == null) return null;
 		FrameStats.enabled = true;
+		// Voxy builds its shaders with statistics only if this is on when its renderer starts.
+		RenderStatistics.enabled = true;
 		try {
 			return new Autopilot(Path.of(path));
 		} catch (IOException e) {
@@ -75,6 +79,10 @@ final class Autopilot {
 				if (p.length == 2) pos = new net.minecraft.core.BlockPos(Integer.parseInt(p[0]), 0, Integer.parseInt(p[1]));
 				SeedLod.LOG.info("[autopilot] compare: {}", session == null || server == null ? "no session/server"
 					: session.compareTrees(server.getLevel(mc.level.dimension()), pos.getX(), pos.getZ()));
+			}
+			case "lods" -> {
+				int[] drawn = RenderStatistics.hierarchicalRenderSections;
+				SeedLod.LOG.info("[autopilot] lods: drawn l0..l4 {}/{}/{}/{}/{}", drawn[0], drawn[1], drawn[2], drawn[3], drawn[4]);
 			}
 			case "trees" -> SeedLod.LOG.info("[autopilot] trees:{}", session == null ? "no session" : session.trees());
 			case "shot" -> Screenshot.grab(mc.gameDirectory, arg + ".png", mc.gameRenderer.mainRenderTarget(), 1,
