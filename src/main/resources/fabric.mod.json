@@ -9,7 +9,8 @@
   "environment": "*",
   "entrypoints": {
     "main": ["dev.winter.seedlod.SeedLod"],
-    "client": ["dev.winter.seedlod.client.SeedLodClient"]
+    "client": ["dev.winter.seedlod.client.SeedLodClient"],
+    "modmenu": ["dev.winter.seedlod.client.ModMenuEntry"]
   },
   "mixins": [{ "config": "seedlod.client.mixins.json", "environment": "client" }],
   "accessWidener": "seedlod.accesswidener",
@@ -19,5 +20,6 @@
     "java": ">=25",
     "fabric-api": "*"
   },
-  "suggests": { "voxy": "*" }
+  "suggests": { "voxy": "*", "modmenu": "*", "cloth-config": "*" },
+  "custom": { "modmenu": { "links": { "modmenu.twitter": "https://x.com/derped_" } } }
 }

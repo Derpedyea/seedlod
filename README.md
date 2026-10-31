@@ -29,8 +29,11 @@ only starts if a test tile matches the server's exactly. Players without the mod
 
 ## Config (`config/seedlod.json`)
 
+Also in game: Mod Menu → Seed LOD (needs Cloth Config). Saving applies right away.
+
 - `threads`: generation threads, 0 = half the cores minus one. They run at a lower OS priority on Linux.
-- `detail`: 1 generates what Voxy draws; lower fills faster and is coarser up close.
+- `enabled`: generate at all.
+- `detail`: 1 generates what Voxy draws; lower (down to 0.1) fills faster and is coarser up close.
 - `finestLevel`: 0 is block detail; 1 or 2 skips the finest level(s) for speed.
 
 ## Commands
