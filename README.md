@@ -14,9 +14,9 @@ does the same from the seed but isn't open source. Seed LOD is an open-source ta
 - Runs the dimension's material (surface) rules on the top voxels: grass, sand, snow, badlands bands, mod biomes.
 - Adds trees from each biome's own vegetation features (count, height, crown shape, leaf and log blocks).
 - Writes each area at the level of detail Voxy will draw it at, worked out from your window size, field of view and
-  Voxy's subdivision setting, down to one block per voxel close up. Level 4 covers the whole render distance first,
-  then everything sharpens nearest-first. Close up, levels 0-1 use vanilla's interpolated density, so terrain matches
-  real chunks; trees are carved with their crown shape. Further out, canopy follows Voxy's own mipping rule.
+  Voxy's subdivision setting, down to one block per voxel close up. It fans out from the player at full detail
+  instead of laying down a coarse blockout first; the coarser stand-in levels underneath come last. Close up, levels
+  0-1 use vanilla's interpolated density, so terrain matches real chunks; trees are carved with their crown shape. Further out, canopy follows Voxy's own mipping rule.
 - When real chunks arrive next to generated data, the coarse sections are split so no holes show, and stand-ins
   are replaced by generated detail later.
 - Use it instead of a Voxy worldgen mod (Voxygen): both at once fight over the CPU.
