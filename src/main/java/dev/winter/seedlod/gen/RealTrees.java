@@ -1,7 +1,6 @@
 package dev.winter.seedlod.gen;
 
 import com.mojang.serialization.MapCodec;
-import dev.winter.seedlod.SeedLod;
 import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -11,7 +10,6 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -48,11 +46,10 @@ public final class RealTrees {
 	static final int MAX_LEVEL = 2;
 	/** Blocks of terrain generated around a group, so trees standing just outside it still reach in. 8 matched barely more. */
 	static final int MARGIN = 4;
-	private static final Set<String> REPORTED = ConcurrentHashMap.newKeySet();
 	/** Set while planting without a live level, for mods that look at it (see the client's StreamsSettingsMixin). */
 	public static final ThreadLocal<Boolean> NO_LEVEL = ThreadLocal.withInitial(() -> false);
 
-	/** Marks the level trees are planted in, for code that has to tell it from a real one. */
+	/** Marks the level trees are planted in, for code that has to tell it from a real one ({@code SeedLodApi.isSeedLodLevel}). */
 	public interface Staged {
 	}
 
@@ -91,7 +88,7 @@ public final class RealTrees {
 						try {
 							placer.place(this.filtered(tree.feature()), random, origin);
 						} catch (RuntimeException e) {
-							if (REPORTED.add(e.toString())) SeedLod.LOG.warn("A tree feature failed on Seed LOD's terrain; skipping it where it does", e);
+							Hooks.report("A tree feature failed on Seed LOD's terrain; skipping it where it does", e);
 						}
 					}
 				}
@@ -131,7 +128,7 @@ public final class RealTrees {
 	/** The level features see: the tile's voxels in block coordinates, and nothing outside it. */
 	private final class Stage implements InvocationHandler {
 		final Tile area;
-		final int step, shift, minX, minZ, span;
+		final int step, minX, minZ, span;
 		final BiomeManager biomes;
 		final RandomSource random = RandomSource.create(0);
 		final WorldGenLevel level;
@@ -141,7 +138,6 @@ public final class RealTrees {
 		Stage(Tile area, BiomeManager biomes) {
 			this.area = area;
 			this.step = 1 << area.lvl;
-			this.shift = area.lvl;
 			this.minX = area.voxelX * this.step;
 			this.minZ = area.voxelZ * this.step;
 			this.span = area.size * this.step;
@@ -149,21 +145,12 @@ public final class RealTrees {
 			this.level = (WorldGenLevel) Proxy.newProxyInstance(RealTrees.class.getClassLoader(), new Class<?>[]{WorldGenLevel.class, Staged.class}, this);
 		}
 
-		/** Column index for block x, z, or -1 outside the tile. */
-		int column(int x, int z) {
-			int vx = (x - this.minX) >> this.shift, vz = (z - this.minZ) >> this.shift;  // floorDiv by step
-			return vx < 0 || vz < 0 || vx >= this.area.size || vz >= this.area.size ? -1 : vx + vz * this.area.size;
-		}
-
-		/** Voxel index for a block, or -1 outside the tile. */
 		int index(BlockPos pos) {
-			int column = this.column(pos.getX(), pos.getZ());
-			int vy = (pos.getY() >> this.shift) - this.area.voxelMinY;
-			return column < 0 || vy < 0 || vy >= this.area.voxelsY ? -1 : vy + column * this.area.voxelsY;
+			return this.area.blockIndex(pos.getX(), pos.getY(), pos.getZ());
 		}
 
 		Holder<Biome> surfaceBiome(int x, int z) {
-			int column = this.column(x, z);
+			int column = this.area.column(x, z);
 			return column < 0 ? null : this.area.biomes[column];
 		}
 
@@ -189,7 +176,7 @@ public final class RealTrees {
 
 		/** Like a chunk's heightmap: the block above the highest one {@code type} counts. */
 		int height(Heightmap.Types type, int x, int z) {
-			int column = this.column(x, z);
+			int column = this.area.column(x, z);
 			if (column < 0) return view.minY;
 			// Features ask for the same columns over and over; remember each answer until a block is set there.
 			int[] tops = this.tops[type.ordinal()];
@@ -199,17 +186,7 @@ public final class RealTrees {
 			}
 			int top = tops[column];
 			if (top != UNKNOWN) return top;
-			top = view.minY;
-			int base = column * this.area.voxelsY;
-			Predicate<BlockState> counts = type.isOpaque();
-			for (int y = this.area.voxelsY - 1; y >= 0; y--) {
-				BlockState state = this.area.states[base + y];
-				if (state != null && counts.test(state)) {
-					top = (this.area.voxelMinY + y + 1) * this.step;
-					break;
-				}
-			}
-			return tops[column] = top;
+			return tops[column] = this.area.height(column, type.isOpaque(), view.minY);
 		}
 
 		@Override

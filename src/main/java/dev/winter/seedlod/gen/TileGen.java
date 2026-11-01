@@ -51,6 +51,7 @@ public final class TileGen implements AutoCloseable {
 	private final RealTrees realTrees;
 	/** Winter Rivers' water, if installed (see {@link RiverWaterLink}). */
 	private final @Nullable Object rivers;
+	private final ModifiedArea modified;
 	private boolean plantTrees = true;
 	/** Vanilla's interpolation cell in blocks (4x8x4 normally), or 0 if the density isn't interpolated. */
 	private final int cellXz, cellY;
@@ -79,6 +80,7 @@ public final class TileGen implements AutoCloseable {
 		this.planter = new TreePlanter(view.trees, view.randomState.seed());
 		this.realTrees = new RealTrees(view);
 		this.rivers = RiverWaterLink.create(view);
+		this.modified = new ModifiedArea(view);
 	}
 
 	/** Terrain only; trees come from data a server may not share identically with its clients. */
@@ -122,9 +124,14 @@ public final class TileGen implements AutoCloseable {
 	}
 
 	public Tile generate(int lvl, int tileX, int tileZ) {
-		Tile tile = this.terrain(lvl, tileX * Tile.SIZE, tileZ * Tile.SIZE, Tile.SIZE);
-		if (this.plantTrees) this.planter.plant(tile, tile.voxelX << lvl, tile.voxelZ << lvl, 1 << lvl);
-		return tile;
+		WorldgenView previous = Hooks.enter(this.view);
+		try {
+			Tile tile = this.terrain(lvl, tileX * Tile.SIZE, tileZ * Tile.SIZE, Tile.SIZE);
+			if (this.plantTrees) this.planter.plant(tile, tile.voxelX << lvl, tile.voxelZ << lvl, 1 << lvl);
+			return tile;
+		} finally {
+			Hooks.exit(previous);
+		}
 	}
 
 	/**
@@ -137,11 +144,16 @@ public final class TileGen implements AutoCloseable {
 			for (int i = 0; i < 4; i++) group[i] = this.generate(lvl, groupX * 2 + (i & 1), groupZ * 2 + (i >> 1));
 			return group;
 		}
-		int margin = RealTrees.MARGIN >> lvl;
-		Tile area = this.terrain(lvl, groupX * 2 * Tile.SIZE - margin, groupZ * 2 * Tile.SIZE - margin, 2 * Tile.SIZE + 2 * margin);
-		this.realTrees.plant(area, this.biomes);
-		for (int i = 0; i < 4; i++) group[i] = area.cut(groupX * 2 + (i & 1), groupZ * 2 + (i >> 1));
-		return group;
+		WorldgenView previous = Hooks.enter(this.view);
+		try {
+			int margin = RealTrees.MARGIN >> lvl;
+			Tile area = this.terrain(lvl, groupX * 2 * Tile.SIZE - margin, groupZ * 2 * Tile.SIZE - margin, 2 * Tile.SIZE + 2 * margin);
+			this.realTrees.plant(area, this.biomes);
+			for (int i = 0; i < 4; i++) group[i] = area.cut(groupX * 2 + (i & 1), groupZ * 2 + (i >> 1));
+			return group;
+		} finally {
+			Hooks.exit(previous);
+		}
 	}
 
 	private Tile terrain(int lvl, int voxelX, int voxelZ, int size) {
@@ -189,6 +201,8 @@ public final class TileGen implements AutoCloseable {
 				this.fillColumn(tile, solid, x, z, blockX, blockZ, step, water);
 			}
 		}
+		// Before trees, so they grow on the edited ground.
+		this.modified.modify(tile);
 		return tile;
 	}
 
