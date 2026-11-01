@@ -1,0 +1,14 @@
+{
+  "seedlod.config.title": "Seed LOD",
+  "seedlod.config.general": "General",
+  "seedlod.config.enabled": "Generate distant terrain",
+  "seedlod.config.enabled.tooltip": "Fill Voxy's distant terrain from the world seed. Off leaves Voxy with only the chunks you've loaded.",
+  "seedlod.config.threads": "Threads",
+  "seedlod.config.threads.auto": "Auto (%s)",
+  "seedlod.config.threads.tooltip": "Generation threads. Auto uses half your cores minus one; they run at low priority.",
+  "seedlod.config.detail": "Detail",
+  "seedlod.config.detail.tooltip": "100% generates the detail Voxy draws at your window size and field of view. Lower fills faster and is coarser up close.",
+  "seedlod.config.finestLevel": "Finest detail",
+  "seedlod.config.finestLevel.value": "%s-block voxels",
+  "seedlod.config.finestLevel.tooltip": "Smallest voxel generated. 1 block matches real chunks up close; larger skips the finest levels for speed."
+}

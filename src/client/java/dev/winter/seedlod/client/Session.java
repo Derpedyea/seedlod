@@ -313,6 +313,11 @@ final class Session {
 		return !Double.isNaN(this.planX) && !this.planning.get() && this.queue.isEmpty() && this.busy.get() == 0;
 	}
 
+	/** Plans again from scratch on the next tick, e.g. for a new detail setting. */
+	void replan() {
+		this.planX = Double.NaN;
+	}
+
 	void forget() {
 		synchronized (this.done) {
 			this.done.clear();

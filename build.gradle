@@ -19,6 +19,8 @@ dependencies {
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 	// Voxy and Sodium are ARR jars copied from the pack; compile against them, never bundle.
 	clientCompileOnly files("libs/voxy-0.2.20-beta.jar", "libs/sodium-fabric-0.9.3-beta.1+mc26.3.jar")
+	// The config screen, when Mod Menu and Cloth Config are installed; also copied from the pack.
+	clientCompileOnly files("libs/modmenu-21.0.0.jar", "libs/cloth-config-fabric-26.3.159.jar")
 }
 
 processResources {
