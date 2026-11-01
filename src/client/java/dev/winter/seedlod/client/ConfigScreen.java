@@ -1,5 +1,6 @@
 package dev.winter.seedlod.client;
 
+import dev.winter.seedlod.gen.TileGen;
 import me.shedaniel.clothconfig2.api.ConfigBuilder;
 import me.shedaniel.clothconfig2.api.ConfigCategory;
 import me.shedaniel.clothconfig2.api.ConfigEntryBuilder;
@@ -37,6 +38,12 @@ final class ConfigScreen {
 			.setTextGetter(lvl -> Component.translatable("seedlod.config.finestLevel.value", 1 << lvl))
 			.setTooltip(Component.translatable("seedlod.config.finestLevel.tooltip"))
 			.setSaveConsumer(v -> config.finestLevel = v)
+			.build());
+		general.addEntry(entries.startIntSlider(Component.translatable("seedlod.config.biomeBlend"), config.biomeBlend, 0, TileGen.MAX_BIOME_BLEND)
+			.setDefaultValue(TileGen.DEFAULT_BIOME_BLEND)
+			.setTextGetter(n -> n == 0 ? Component.translatable("seedlod.config.biomeBlend.off") : Component.translatable("seedlod.config.biomeBlend.value", n))
+			.setTooltip(Component.translatable("seedlod.config.biomeBlend.tooltip"))
+			.setSaveConsumer(v -> config.biomeBlend = v)
 			.build());
 		return builder.build();
 	}

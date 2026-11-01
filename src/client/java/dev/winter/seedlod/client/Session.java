@@ -60,6 +60,7 @@ final class Session {
 	private final long seed;
 	private final Path doneFile;
 	private final BooleanSupplier canWrite;
+	private final int biomeBlend;
 	private final LodTree.RealChunks real;
 	/** No saved record yet: whether Voxy's data is all recorded is decided at the first plan, by looking. */
 	private boolean realUnknown = true;
@@ -85,6 +86,7 @@ final class Session {
 		this.seed = seed;
 		this.doneFile = doneFile;
 		this.canWrite = canWrite;
+		this.biomeBlend = config.biomeBlend;
 		this.engine.acquireRef();
 		this.real = LodTree.real(engine);
 		this.loadDone();
@@ -166,7 +168,7 @@ final class Session {
 
 	private void work() {
 		Niceness.lowerCurrentThread(10);
-		try (TileGen gen = new TileGen(this.view)) {
+		try (TileGen gen = new TileGen(this.view).withBiomeBlend(this.biomeBlend)) {
 			VoxyWriter writer = new VoxyWriter(this.engine);
 			while (!this.stopped) {
 				Job job = this.queue.take();

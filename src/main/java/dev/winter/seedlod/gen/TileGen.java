@@ -36,6 +36,7 @@ public final class TileGen implements AutoCloseable {
 	private static final int EXACT_MAX_LEVEL = 1;
 	/** Stream water only stands where the ground is at most this far under its bottom (Winter Rivers' bed support). */
 	private static final int RIVER_SUPPORT = 7;
+	public static final int DEFAULT_BIOME_BLEND = 8, MAX_BIOME_BLEND = 32;
 
 	private final WorldgenView view;
 	private final DensityBufferPool bufferPool;
@@ -53,6 +54,12 @@ public final class TileGen implements AutoCloseable {
 	private final @Nullable Object rivers;
 	private final ModifiedArea modified;
 	private boolean plantTrees = true;
+	/**
+	 * Voxy tints a voxel with one biome's colour, with no blending, so borders show as steps of whole voxels. Each
+	 * column's tint biome is instead read up to this many blocks (plus one voxel) away, at a hashed spot: borders
+	 * become a dithered band that blends from afar, like vanilla's biome blend. 0 tints with the column's own biome.
+	 */
+	private int biomeBlend = DEFAULT_BIOME_BLEND;
 	/** Vanilla's interpolation cell in blocks (4x8x4 normally), or 0 if the density isn't interpolated. */
 	private final int cellXz, cellY;
 	/** Per-tile scratch, kept: a level 0 group's is megabytes, too big to allocate for every tile. */
@@ -86,6 +93,12 @@ public final class TileGen implements AutoCloseable {
 	/** Terrain only; trees come from data a server may not share identically with its clients. */
 	TileGen withoutTrees() {
 		this.plantTrees = false;
+		return this;
+	}
+
+	/** How far tint biomes are blended across borders, in blocks; 0 is off. */
+	public TileGen withBiomeBlend(int blocks) {
+		this.biomeBlend = Math.clamp(blocks, 0, MAX_BIOME_BLEND);
 		return this;
 	}
 
@@ -189,8 +202,10 @@ public final class TileGen implements AutoCloseable {
 				int blockX = originX + x * step + half;
 				int column = x + z * size;
 				int surfaceY = Math.max(top[column], this.view.seaLevel - 1);
+				Holder<Biome> tint = this.biomeBlend == 0 ? null : this.tintBiome(blockX, surfaceY, blockZ, step);
 				Holder<Biome> biome = this.biomeCache.surface(blockX, surfaceY, blockZ);
 				tile.biomes[column] = biome;
+				tile.tints[column] = tint != null ? tint : biome;
 
 				int gradientX = (top[Math.min(x + 1, size - 1) + z * size] - top[Math.max(x - 1, 0) + z * size]) / step;
 				int gradientZ = (top[x + Math.min(z + 1, size - 1) * size] - top[x + Math.max(z - 1, 0) * size]) / step;
@@ -204,6 +219,25 @@ public final class TileGen implements AutoCloseable {
 		// Before trees, so they grow on the edited ground.
 		this.modified.modify(tile);
 		return tile;
+	}
+
+	/**
+	 * The biome at a hashed spot near the column, up to {@link #biomeBlend} plus one voxel away each way, nearer
+	 * spots likelier (the sum of two uniform rolls). Hashed from the world position, so every tile and level agrees.
+	 */
+	private Holder<Biome> tintBiome(int blockX, int surfaceY, int blockZ, int step) {
+		long h = mix(blockX * 0x9E3779B97F4A7C15L + blockZ * 0xC2B2AE3D27D4EB4FL);
+		int spread = this.biomeBlend + step;
+		int dx = (int) (((h & 0xFFFF) - (h >>> 16 & 0xFFFF)) * spread >> 16);
+		int dz = (int) (((h >>> 32 & 0xFFFF) - (h >>> 48)) * spread >> 16);
+		return this.biomeCache.at(blockX + dx, surfaceY, blockZ + dz);
+	}
+
+	/** SplitMix64's finaliser. */
+	private static long mix(long z) {
+		z = (z ^ z >>> 30) * 0xBF58476D1CE4E5B9L;
+		z = (z ^ z >>> 27) * 0x94D049BB133111EBL;
+		return z ^ z >>> 31;
 	}
 
 	/**
@@ -443,14 +477,19 @@ public final class TileGen implements AutoCloseable {
 			this.quarts.clear();
 		}
 
+		/** Sets the column the rules ask about. */
 		Holder<Biome> surface(int blockX, int surfaceY, int blockZ) {
+			return this.column = this.at(blockX, surfaceY, blockZ);
+		}
+
+		Holder<Biome> at(int blockX, int surfaceY, int blockZ) {
 			long key = (long) (blockX >> 2) << 32 | ((blockZ >> 2) & 0xFFFFFFFFL);
 			Holder<Biome> biome = this.quarts.get(key);
 			if (biome == null) {
 				biome = TileGen.this.biomes.getNoiseBiome(blockX >> 2, surfaceY >> 2, blockZ >> 2);
 				this.quarts.put(key, biome);
 			}
-			return this.column = biome;
+			return biome;
 		}
 
 		Holder<Biome> get(BlockPos pos) {

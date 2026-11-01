@@ -31,6 +31,8 @@ public final class Tile {
 	public final byte[] light;
 	/** Surface biome per column, x + z * 32. */
 	public final Holder<Biome>[] biomes;
+	/** Biome Voxy tints each column with: {@link #biomes} dithered across borders, so they blend from afar. */
+	public final Holder<Biome>[] tints;
 
 	Tile(int lvl, int tileX, int tileZ, int voxelMinY, int voxelsY) {
 		this(lvl, tileX * SIZE, tileZ * SIZE, SIZE, voxelMinY, voxelsY);
@@ -49,6 +51,7 @@ public final class Tile {
 		this.states = new BlockState[size * size * voxelsY];
 		this.light = new byte[size * size * voxelsY];
 		this.biomes = new Holder[size * size];
+		this.tints = new Holder[size * size];
 	}
 
 	public int index(int x, int y, int z) {
@@ -109,6 +112,7 @@ public final class Tile {
 				System.arraycopy(this.states, from, out.states, to, this.voxelsY);
 				System.arraycopy(this.light, from, out.light, to, this.voxelsY);
 				out.biomes[x + z * SIZE] = this.biomes[offsetX + x + (offsetZ + z) * this.size];
+				out.tints[x + z * SIZE] = this.tints[offsetX + x + (offsetZ + z) * this.size];
 			}
 		return out;
 	}
