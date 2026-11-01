@@ -3,6 +3,7 @@ package dev.winter.seedlod.client;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import dev.winter.seedlod.SeedLod;
+import dev.winter.seedlod.gen.TileGen;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,6 +25,8 @@ public final class SeedLodConfig {
 	public double detail = 1.0;
 	/** Finest level generated: 0 is one block per voxel, as close up as Voxy draws. */
 	public int finestLevel = 0;
+	/** Blocks grass, leaf and water colours are dithered across biome borders; 0 keeps hard edges. */
+	public int biomeBlend = TileGen.DEFAULT_BIOME_BLEND;
 
 	public static SeedLodConfig load() {
 		SeedLodConfig config = new SeedLodConfig();
@@ -49,6 +52,7 @@ public final class SeedLodConfig {
 		this.threads = Math.max(0, this.threads);
 		this.detail = Double.isNaN(this.detail) ? 1.0 : Math.clamp(this.detail, MIN_DETAIL, MAX_DETAIL);
 		this.finestLevel = Math.clamp(this.finestLevel, 0, MAX_LEVEL);
+		this.biomeBlend = Math.clamp(this.biomeBlend, 0, TileGen.MAX_BIOME_BLEND);
 	}
 
 	SeedLodConfig copy() {
@@ -57,6 +61,7 @@ public final class SeedLodConfig {
 		c.threads = this.threads;
 		c.detail = this.detail;
 		c.finestLevel = this.finestLevel;
+		c.biomeBlend = this.biomeBlend;
 		return c;
 	}
 

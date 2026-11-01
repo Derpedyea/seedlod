@@ -74,7 +74,7 @@ final class VoxyWriter {
 		boolean any = false;
 		for (int z = 0; z < 32; z++)
 			for (int x = 0; x < 32; x++) {
-				int biome = this.biomeId(tile.biomes[x + z * 32]);
+				int biome = this.biomeId(tile.tints[x + z * 32]);
 				for (int ly = 0; ly < 32; ly++) {
 					int y = sy * 32 + ly - tile.voxelMinY;
 					long id;

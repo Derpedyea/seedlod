@@ -125,7 +125,7 @@ public final class SeedLodClient implements ClientModInitializer {
 
 	/** From the config screen: detail applies on the next plan, the rest restarts generation. */
 	static void apply(SeedLodConfig next) {
-		boolean restart = next.enabled != config.enabled || next.threadCount() != config.threadCount();
+		boolean restart = next.enabled != config.enabled || next.threadCount() != config.threadCount() || next.biomeBlend != config.biomeBlend;
 		config = next;
 		next.save();
 		Session current = session;

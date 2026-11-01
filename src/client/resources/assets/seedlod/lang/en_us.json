@@ -10,5 +10,9 @@
   "seedlod.config.detail.tooltip": "100% generates the detail Voxy draws at your window size and field of view. Lower fills faster and is coarser up close.",
   "seedlod.config.finestLevel": "Finest detail",
   "seedlod.config.finestLevel.value": "%s-block voxels",
-  "seedlod.config.finestLevel.tooltip": "Smallest voxel generated. 1 block matches real chunks up close; larger skips the finest levels for speed."
+  "seedlod.config.finestLevel.tooltip": "Smallest voxel generated. 1 block matches real chunks up close; larger skips the finest levels for speed.",
+  "seedlod.config.biomeBlend": "Biome blend",
+  "seedlod.config.biomeBlend.off": "Off",
+  "seedlod.config.biomeBlend.value": "%s blocks",
+  "seedlod.config.biomeBlend.tooltip": "How far grass, leaf and water colours mix across biome borders, as a dithered band. Wider reads smoother from afar, grainier up close. Applies to terrain generated from now on; /seedlod regen redoes the rest."
 }

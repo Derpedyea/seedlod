@@ -35,6 +35,9 @@ Also in game: Mod Menu → Seed LOD (needs Cloth Config). Saving applies right a
 - `enabled`: generate at all.
 - `detail`: 1 generates what Voxy draws; lower (down to 0.1) fills faster and is coarser up close.
 - `finestLevel`: 0 is block detail; 1 or 2 skips the finest level(s) for speed.
+- `biomeBlend`: blocks that grass, leaf and water colours are dithered across biome borders (0-32, default 8, 0 is
+  off). Voxy colours each voxel from one biome, so this is how borders blend instead of stepping. Wider reads
+  smoother from afar and grainier up close. Applies to newly generated terrain; `/seedlod regen` redoes the rest.
 
 ## Commands
 
