@@ -31,14 +31,22 @@ import me.cortex.voxy.common.world.WorldEngine;
  * Generation for one world: plans 2x2 tile groups around the player at the levels Voxy will draw them at, runs them on
  * background threads and remembers which are done next to Voxy's own storage for that world.
  *
- * <p>Order: level 4 over the whole render distance first, so nothing is missing for long. Then every finer group by
- * how big it is on screen (distance over section size), so what is in front of the player sharpens first and a
- * group's parent always comes before it.
+ * <p>Order: fanning out from the player, each area at the level Voxy draws it at, so terrain appears at full detail
+ * nearest first instead of as a coarse blockout. The levels under that, which Voxy only draws while finer data is
+ * missing (or after the player moves away), come last. Either order is sound: {@link VoxyWriter} handles a parent
+ * written before or after its children.
  */
 final class Session {
 	private static final int FILE_VERSION = 3;
 	private static final int REPLAN_DISTANCE = 128;
 	private static final boolean DEBUG = Boolean.getBoolean("seedlod.debug");
+	/**
+	 * How far inside the finer level's reach a level can still be drawn. Voxy's split test depends on the angle a
+	 * section is seen at, down to about 0.6 of {@link DetailRule}'s reach looking straight at a face.
+	 */
+	private static final double SHOWN_INSIDE_FINER = 0.5;
+	/** Priority offset for groups that are only stand-ins: after everything that's drawn. */
+	private static final long STAND_IN = 1L << 40;
 
 	private record Job(int lvl, int groupX, int groupZ, long priority) implements Comparable<Job> {
 		@Override
@@ -130,10 +138,14 @@ final class Session {
 			}
 		}
 		List<Job> jobs = new ArrayList<>();
+		int[] reach = rule.reach();
 		synchronized (this.done) {
 			for (int lvl = WorldEngine.MAX_LOD_LAYER; lvl >= 0; lvl--) {
-				int radius = rule.reach()[lvl];
+				int radius = reach[lvl];
 				if (radius <= 0) continue;
+				// Inside this the finer level is drawn instead, and this one is only a stand-in.
+				int finer = lvl > 0 && reach[lvl - 1] > 0 ? reach[lvl - 1] : 0;
+				double shownFrom = finer >= radius ? Double.MAX_VALUE : finer * SHOWN_INSIDE_FINER;
 				int groupSpan = 2 * Tile.SIZE << lvl;
 				int min = Math.floorDiv(-radius, groupSpan) - 1, max = Math.floorDiv(radius, groupSpan) + 1;
 				int cx = Math.floorDiv(x, groupSpan), cz = Math.floorDiv(z, groupSpan);
@@ -144,8 +156,7 @@ final class Session {
 						if (dist > radius) continue;
 						long key = key(lvl, gx, gz);
 						if (this.done.contains(key) || this.inFlight.contains(key)) continue;
-						long onScreen = (long) (dist * 1024 / (Tile.SIZE << lvl));
-						jobs.add(new Job(lvl, gx, gz, lvl == WorldEngine.MAX_LOD_LAYER ? onScreen : (1L << 40) + onScreen));
+						jobs.add(new Job(lvl, gx, gz, (dist >= shownFrom ? 0 : STAND_IN) + (long) dist));
 					}
 			}
 		}
