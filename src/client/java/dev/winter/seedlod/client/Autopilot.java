@@ -6,7 +6,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import com.terraformersmc.modmenu.api.ModMenuApi;
 import me.cortex.voxy.client.RenderStatistics;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import org.jspecify.annotations.Nullable;
@@ -16,7 +18,8 @@ import org.jspecify.annotations.Nullable;
  * world it runs the script's lines in order:
  * {@code cmd <command>}, {@code sleep <seconds>}, {@code idle} (wait for generation to finish),
  * {@code status}, {@code shot <name>}, {@code frames <seconds>} (frame time stats over that long),
- * {@code lods} (sections Voxy draws per level), {@code quit}.
+ * {@code lods} (sections Voxy draws per level), {@code config <modid>} (open its Mod Menu screen), {@code close},
+ * {@code quit}.
  */
 final class Autopilot {
 	private final Deque<String> lines = new ArrayDeque<>();
@@ -97,6 +100,11 @@ final class Autopilot {
 				this.framesUntil = System.currentTimeMillis() + (long) (Double.parseDouble(arg) * 1000);
 				this.waitUntil = this.framesUntil;
 			}
+			// Opens a mod's Mod Menu config screen, by mod id.
+			case "config" -> FabricLoader.getInstance().getEntrypointContainers("modmenu", ModMenuApi.class).stream()
+				.filter(c -> c.getProvider().getMetadata().getId().equals(arg)).findFirst()
+				.ifPresent(c -> mc.gui.setScreen(c.getEntrypoint().getModConfigScreenFactory().create(mc.gui.screen())));
+			case "close" -> mc.gui.setScreen(null);
 			case "quit" -> mc.stop();
 			default -> SeedLod.LOG.warn("[autopilot] unknown line: {}", line);
 		}

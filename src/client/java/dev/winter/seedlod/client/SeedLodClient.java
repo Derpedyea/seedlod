@@ -119,6 +119,20 @@ public final class SeedLodClient implements ClientModInitializer {
 		}));
 	}
 
+	static SeedLodConfig config() {
+		return config;
+	}
+
+	/** From the config screen: detail applies on the next plan, the rest restarts generation. */
+	static void apply(SeedLodConfig next) {
+		boolean restart = next.enabled != config.enabled || next.threadCount() != config.threadCount();
+		config = next;
+		next.save();
+		Session current = session;
+		if (restart) stop();  // tick() starts again if still enabled
+		else if (current != null) current.replan();
+	}
+
 	private static void begin(ClientLevel level, WorldgenView view, WorldEngine engine, long seed, Path doneFile) {
 		session = new Session(view, engine, seed, doneFile, config, VoxyCommon.getInstance().savingServiceRateLimiter);
 		SeedLod.LOG.info("Seed LOD started for {} ({} threads)", level.dimension().identifier(), config.threadCount());
