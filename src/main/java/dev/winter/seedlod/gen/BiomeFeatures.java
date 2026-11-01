@@ -59,6 +59,7 @@ public final class BiomeFeatures {
 	}
 
 	private static boolean growsTrees(PlacedFeature feature) {
-		return feature.getFeatures().anyMatch(f -> f.value() instanceof TreeFeature || f.value() instanceof FallenTreeFeature);
+		Hooks hooks = Hooks.get();
+		return feature.getFeatures().anyMatch(f -> f.value() instanceof TreeFeature || f.value() instanceof FallenTreeFeature || hooks.tree(f.value()) != null);
 	}
 }

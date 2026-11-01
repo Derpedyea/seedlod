@@ -18,11 +18,13 @@ public final class Fingerprint {
 				for (int x = 0; x < Tile.SIZE; x++) {
 					int y = tile.voxelsY - 1;
 					while (y >= 0 && tile.states[tile.index(x, y, z)] == null) y--;
-					while (y >= 0 && !tile.states[tile.index(x, y, z)].getFluidState().isEmpty()) {
+					// A terrain modifier can leave air under fluid (a waterfall): that floor hashes as air.
+					while (y >= 0 && tile.states[tile.index(x, y, z)] != null && !tile.states[tile.index(x, y, z)].getFluidState().isEmpty()) {
 						surface = 31 * surface + tile.states[tile.index(x, y, z)].toString().hashCode();
 						y--;
 					}
-					surface = 31 * surface + (y < 0 ? 0 : tile.states[tile.index(x, y, z)].toString().hashCode());
+					BlockState floor = y < 0 ? null : tile.states[tile.index(x, y, z)];
+					surface = 31 * surface + (floor == null ? 0 : floor.toString().hashCode());
 				}
 			for (var biome : tile.biomes) biomes = 31 * biomes + biome.unwrapKey().map(k -> k.identifier().toString()).orElse("?").hashCode();
 			if (Boolean.getBoolean("seedlod.debug")) {

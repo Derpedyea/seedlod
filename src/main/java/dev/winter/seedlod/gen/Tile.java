@@ -1,5 +1,6 @@
 package dev.winter.seedlod.gen;
 
+import java.util.function.Predicate;
 import net.minecraft.core.Holder;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.state.BlockState;
@@ -52,6 +53,50 @@ public final class Tile {
 
 	public int index(int x, int y, int z) {
 		return y + (x + z * this.size) * this.voxelsY;
+	}
+
+	/** Column index holding block x, z, or -1 outside the tile. */
+	int column(int blockX, int blockZ) {
+		int vx = (blockX >> this.lvl) - this.voxelX, vz = (blockZ >> this.lvl) - this.voxelZ;  // floorDiv by the step
+		return vx < 0 || vz < 0 || vx >= this.size || vz >= this.size ? -1 : vx + vz * this.size;
+	}
+
+	/** Voxel index holding a block, or -1 outside the tile. */
+	int blockIndex(int blockX, int blockY, int blockZ) {
+		int column = this.column(blockX, blockZ);
+		int vy = (blockY >> this.lvl) - this.voxelMinY;
+		return column < 0 || vy < 0 || vy >= this.voxelsY ? -1 : vy + column * this.voxelsY;
+	}
+
+	/** The bottom of the voxel above the column's highest state that {@code counts}, or {@code floor} if none does. */
+	int height(int column, Predicate<BlockState> counts, int floor) {
+		int base = column * this.voxelsY;
+		for (int y = this.voxelsY - 1; y >= 0; y--) {
+			BlockState state = this.states[base + y];
+			if (state != null && counts.test(state)) return (this.voxelMinY + y + 1) << this.lvl;
+		}
+		return floor;
+	}
+
+	/**
+	 * Recomputes a column's light the way the terrain pass sets it: open sky in air, darker with depth in fluid.
+	 * Solid voxels keep theirs.
+	 */
+	void relight(int column, int seaLevel) {
+		int base = column * this.voxelsY, step = 1 << this.lvl;
+		int fluidTop = Integer.MIN_VALUE;
+		for (int y = this.voxelsY - 1; y >= 0; y--) {
+			BlockState state = this.states[base + y];
+			int top = (this.voxelMinY + y + 1) * step;
+			if (state == null) {
+				fluidTop = Integer.MIN_VALUE;
+				this.light[base + y] = 15;
+			} else if (!state.getFluidState().isEmpty()) {
+				// The sea's surface is at sea level even where a coarse voxel reaches above it.
+				if (fluidTop == Integer.MIN_VALUE) fluidTop = top - step + (step >> 1) < seaLevel ? Math.min(top, seaLevel) : top;
+				this.light[base + y] = (byte) Math.clamp(15 - (fluidTop - top), 0, 15);
+			}
+		}
 	}
 
 	/** The regular tile (tileX, tileZ) out of this wider one. */

@@ -41,6 +41,12 @@ Also in game: Mod Menu → Seed LOD (needs Cloth Config). Saving applies right a
 - `/seedlod status`: progress.
 - `/seedlod regen`: forget what's been generated and do it again.
 
+## For mod authors
+
+Worldgen from data packs and registries (density functions, surface rules, biomes, vanilla trees) shows up on its
+own. Mods that change terrain in code or grow trees with their own feature class can hook in through the `seedlod`
+entrypoint, without depending on Seed LOD: see [docs/api.md](docs/api.md).
+
 ## Build
 
 `./gradlew build`. Voxy and Sodium aren't on a maven: copy their jars from the pack into `libs/` (see `build.gradle`).

@@ -1,5 +1,6 @@
 package dev.winter.seedlod.gen;
 
+import dev.winter.seedlod.api.TreeShape;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +25,7 @@ import net.minecraft.world.level.levelgen.placement.NoiseThresholdCountPlacement
 import net.minecraft.world.level.levelgen.placement.PlacedFeature;
 import net.minecraft.world.level.levelgen.placement.PlacementModifier;
 import net.minecraft.world.level.levelgen.placement.RarityFilter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * What trees a biome grows, on average: read from its vegetation features rather than generated. Counts come from
@@ -85,7 +87,11 @@ public final class BiomeTrees {
 		rate *= expectedCount(placed.placement());
 		if (rate <= 0) return;
 		Feature feature = placed.feature().value();
-		if (feature instanceof TreeFeature tree) {
+		Hooks.Tree<?> registered = Hooks.get().tree(feature);
+		if (registered != null) {
+			Kind kind = fromCanopy(registered.describe(feature), rate);
+			if (kind != null) out.add(kind);
+		} else if (feature instanceof TreeFeature tree) {
 			Kind kind = describe(tree, rate);
 			if (kind != null) out.add(kind);
 		} else if (feature instanceof RandomSelectorFeature selector) {
@@ -154,6 +160,14 @@ public final class BiomeTrees {
 		float crownHeight = Math.clamp(crown, 2.0F, Math.max(2.0F, trunkTop - 2));
 		float crownRadius = Math.clamp(radius + 0.5F, 1.0F, Math.max(1.5F, columnar ? 2.0F : trunkTop * 0.45F));
 		return new Kind(perChunk, trunkTop, crownRadius, crownHeight, leaves);
+	}
+
+	/** A plugin's {@link TreeShape.Canopy} as a kind; its crown spans the top {@code crownHeight} of its {@code height}. */
+	private static @Nullable Kind fromCanopy(TreeShape.@Nullable Canopy canopy, float perChunk) {
+		if (canopy == null || canopy.leaves() == null || canopy.leaves().isAir() || !(canopy.height() >= 1)) return null;
+		float crownHeight = Math.clamp(canopy.crownHeight(), 1.0F, canopy.height());
+		// A kind's crown runs from height - crownHeight to height + 1 above the ground.
+		return new Kind(perChunk, canopy.height() - 1, Math.max(0.5F, canopy.crownRadius()), crownHeight - 1, canopy.leaves());
 	}
 
 	private static BlockState leaves(TreeFeature tree) {

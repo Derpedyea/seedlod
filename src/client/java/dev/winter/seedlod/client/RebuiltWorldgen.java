@@ -89,7 +89,8 @@ final class RebuiltWorldgen {
 		if (!(generator instanceof NoiseBasedChunkGenerator noise)) return null;
 		var settings = noise.generatorSettings().value();
 		RandomState random = RandomState.create(this.registries.lookupOrThrow(Registries.NOISE), this.payload.seed(), settings);
-		return new WorldgenView(random, settings, generator, height, this.payload.seed(), this::features, this.access, null);
+		ResourceKey<net.minecraft.world.level.Level> key = ResourceKey.create(Registries.DIMENSION, Identifier.parse(dimension));
+		return new WorldgenView(key, random, settings, generator, height, this.payload.seed(), this::features, this.access, null);
 	}
 
 	/** A biome's features as the server has them; the client's own where the server sent none. */
