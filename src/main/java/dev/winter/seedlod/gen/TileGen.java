@@ -34,8 +34,6 @@ public final class TileGen implements AutoCloseable {
 	private static final int RULE_DEPTH_BLOCKS = 9;
 	private static final int SCOUT_BLOCKS = 16;
 	private static final int EXACT_MAX_LEVEL = 1;
-	/** Stream water only stands where the ground is at most this far under its bottom (Winter Rivers' bed support). */
-	private static final int RIVER_SUPPORT = 7;
 	public static final int DEFAULT_BIOME_BLEND = 8, MAX_BIOME_BLEND = 32;
 
 	private final WorldgenView view;
@@ -50,8 +48,6 @@ public final class TileGen implements AutoCloseable {
 	private final BiomeCache biomeCache = new BiomeCache();
 	private final TreePlanter planter;
 	private final RealTrees realTrees;
-	/** Winter Rivers' water, if installed (see {@link RiverWaterLink}). */
-	private final @Nullable Object rivers;
 	private final ModifiedArea modified;
 	private boolean plantTrees = true;
 	/**
@@ -86,7 +82,6 @@ public final class TileGen implements AutoCloseable {
 		this.rule = view.settings.materialRule().value().compile(this.ruleContext);
 		this.planter = new TreePlanter(view.trees, view.randomState.seed());
 		this.realTrees = new RealTrees(view);
-		this.rivers = RiverWaterLink.create(view);
 		this.modified = new ModifiedArea(view);
 	}
 
@@ -210,10 +205,7 @@ public final class TileGen implements AutoCloseable {
 				int gradientX = (top[Math.min(x + 1, size - 1) + z * size] - top[Math.max(x - 1, 0) + z * size]) / step;
 				int gradientZ = (top[x + Math.min(z + 1, size - 1) * size] - top[x + Math.max(z - 1, 0) * size]) / step;
 				this.ruleContext.updateXZ(blockX, blockZ, gradientX, gradientZ);
-				long water = this.rivers == null ? RiverWaterLink.NONE : RiverWaterLink.at(this.rivers, blockX, blockZ);
-				// like the chunk fill: no stream water where the ground has fallen away under it (a cliff edge)
-				if (water != RiverWaterLink.NONE && top[column] < (int) water - RIVER_SUPPORT) water = RiverWaterLink.NONE;
-				this.fillColumn(tile, solid, x, z, blockX, blockZ, step, water);
+				this.fillColumn(tile, solid, x, z, blockX, blockZ, step);
 			}
 		}
 		// Before trees, so they grow on the edited ground.
@@ -417,9 +409,8 @@ public final class TileGen implements AutoCloseable {
 	}
 
 	/** Mirrors vanilla's surface pass over one column, top down, in voxel steps. */
-	private void fillColumn(Tile tile, boolean[] solid, int x, int z, int blockX, int blockZ, int step, long water) {
+	private void fillColumn(Tile tile, boolean[] solid, int x, int z, int blockX, int blockZ, int step) {
 		int half = step >> 1;
-		int riverTop = water == RiverWaterLink.NONE ? Integer.MIN_VALUE : (int) (water >> 32), riverBottom = (int) water;
 		int seaLevel = this.view.seaLevel;
 		int stoneAbove = 0;
 		int waterHeight = Integer.MIN_VALUE;
@@ -429,9 +420,8 @@ public final class TileGen implements AutoCloseable {
 			int blockY = (tile.voxelMinY + y) * step + half;
 			if (!solid[index]) {
 				stoneAbove = 0;
-				boolean river = blockY < riverTop && blockY >= riverBottom;
-				if (blockY < seaLevel || river) {
-					if (waterHeight == Integer.MIN_VALUE) waterHeight = Math.min(river ? Math.max(riverTop, seaLevel) : seaLevel, (tile.voxelMinY + y + 1) * step);
+				if (blockY < seaLevel) {
+					if (waterHeight == Integer.MIN_VALUE) waterHeight = Math.min(seaLevel, (tile.voxelMinY + y + 1) * step);
 					tile.states[index] = this.view.defaultFluid;
 					// Light at the voxel's top, so the surface voxel is fully lit however coarse the level.
 					tile.light[index] = (byte) Mth.clamp(15 - (waterHeight - (tile.voxelMinY + y + 1) * step), 0, 15);

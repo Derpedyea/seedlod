@@ -254,8 +254,10 @@ final class Session {
 		try (TileGen gen = new TileGen(this.view)) {
 			group = gen.generateGroup(0, Math.floorDiv(x, 64), Math.floorDiv(z, 64));
 		}
-		int both = 0, onlyReal = 0, onlyOurs = 0, groundOff = 0;
+		int both = 0, onlyReal = 0, onlyOurs = 0, groundOff = 0, topSame = 0, wetReal = 0, wetOurs = 0, wetBoth = 0;
 		var diffs = new java.util.TreeMap<String, Integer>();
+		var tops = new java.util.TreeMap<String, Integer>();
+		int sea = level.getSeaLevel();
 		var pos = new net.minecraft.core.BlockPos.MutableBlockPos();
 		// Top-down, 8 px a column: green both, red only real, blue only ours, grey no trees; a dark dot where the ground differs.
 		var image = new java.awt.image.BufferedImage(64 * 8, 64 * 8, java.awt.image.BufferedImage.TYPE_INT_RGB);
@@ -266,6 +268,7 @@ final class Session {
 					int bx = tile.tileX * Tile.SIZE + tx, bz = tile.tileZ * Tile.SIZE + tz;
 					var chunk = level.getChunk(bx >> 4, bz >> 4);
 					int b = 0, r0 = 0, o0 = 0, ourGround = Integer.MIN_VALUE, realGround = Integer.MIN_VALUE;
+					boolean ourWet = false, realWet = false;
 					var ground = net.minecraft.world.level.levelgen.Heightmap.Types.OCEAN_FLOOR.isOpaque();
 					for (int y = 0; y < tile.voxelsY; y++) {
 						var ours = tile.states[tile.index(tx, y, tz)];
@@ -276,6 +279,20 @@ final class Session {
 						else if (o) o0++;
 						if (ours != null && !o && ground.test(ours)) ourGround = tile.voxelMinY + y + 1;
 						if (!r && ground.test(real)) realGround = tile.voxelMinY + y + 1;
+						// stream and lake water: fluid above sea level
+						if (tile.voxelMinY + y >= sea) {
+							if (ours != null && !ours.getFluidState().isEmpty()) ourWet = true;
+							if (!real.getFluidState().isEmpty()) realWet = true;
+						}
+					}
+					if (ourWet && realWet) wetBoth++;
+					else if (realWet) wetReal++;
+					else if (ourWet) wetOurs++;
+					if (realGround == ourGround && realGround != Integer.MIN_VALUE) {
+						var ourTop = tile.states[tile.index(tx, realGround - 1 - tile.voxelMinY, tz)];
+						var realTop = chunk.getBlockState(pos.set(bx, realGround - 1, bz));
+						if (ourTop != null && ourTop.getBlock() == realTop.getBlock()) topSame++;
+						else tops.merge("ours " + (ourTop == null ? "air" : ourTop.getBlock()) + " real " + realTop.getBlock(), 1, Integer::sum);
 					}
 					both += b;
 					onlyReal += r0;
@@ -300,7 +317,9 @@ final class Session {
 			throw new java.io.UncheckedIOException(e);
 		}
 		var top = diffs.entrySet().stream().sorted((a, b) -> b.getValue() - a.getValue()).limit(8).map(e -> e.getValue() + "x " + e.getKey()).toList();
-		return String.format("tree blocks: both %d, only real %d, only ours %d; ground differs in %d/4096 columns: %s", both, onlyReal, onlyOurs, groundOff, top);
+		var topDiffs = tops.entrySet().stream().sorted((a, b) -> b.getValue() - a.getValue()).limit(8).map(e -> e.getValue() + "x " + e.getKey()).toList();
+		return String.format("tree blocks: both %d, only real %d, only ours %d; ground differs in %d/4096 columns: %s; same top block %d/%d: %s; water above sea both %d, only real %d, only ours %d",
+			both, onlyReal, onlyOurs, groundOff, top, topSame, 4096 - groundOff, topDiffs, wetBoth, wetReal, wetOurs);
 	}
 
 	private static boolean isTree(net.minecraft.world.level.block.state.BlockState state) {

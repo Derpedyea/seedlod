@@ -25,7 +25,7 @@ public final class Hooks {
 	private static final ThreadLocal<@Nullable WorldgenView> CURRENT = new ThreadLocal<>();
 	private static final Set<String> REPORTED = ConcurrentHashMap.newKeySet();
 
-	record Modifier(Identifier id, TerrainModifier.Factory factory) {
+	record Modifier(Identifier id, Set<Identifier> after, TerrainModifier.Factory factory) {
 	}
 
 	record Tree<F extends Feature>(Class<F> type, TreeShape<? super F> shape) {
@@ -40,7 +40,7 @@ public final class Hooks {
 		}
 	}
 
-	/** Sorted by id, so a server and its clients run them in the same order. */
+	/** In {@link #order} order, so a server and its clients run them the same way. */
 	final List<Modifier> modifiers;
 	private final List<Tree<?>> trees;
 
@@ -70,10 +70,10 @@ public final class Hooks {
 			boolean[] open = {true};
 			SeedLodRegistrar registrar = new SeedLodRegistrar() {
 				@Override
-				public void terrainModifier(Identifier id, TerrainModifier.Factory factory) {
+				public void terrainModifier(Identifier id, Set<Identifier> after, TerrainModifier.Factory factory) {
 					check();
 					if (!ids.add(id)) throw new IllegalArgumentException("Seed LOD terrain modifier " + id + " is registered twice");
-					ownModifiers.add(new Modifier(id, factory));
+					ownModifiers.add(new Modifier(id, Set.copyOf(after), factory));
 				}
 
 				@Override
@@ -97,11 +97,42 @@ public final class Hooks {
 				open[0] = false;
 			}
 		}
-		modifiers.sort(Comparator.comparing(m -> m.id().toString()));
+		modifiers = order(modifiers);
 		if (!modifiers.isEmpty() || !trees.isEmpty())
 			SeedLod.LOG.info("Seed LOD hooks: terrain modifiers {}, tree features {}",
 				modifiers.stream().map(Modifier::id).toList(), trees.stream().map(t -> t.type().getName()).toList());
 		return new Hooks(List.copyOf(modifiers), List.copyOf(trees));
+	}
+
+	/**
+	 * By id, except that a modifier waits for the registered ones it runs after: each time, the lowest id whose
+	 * {@code after} have all run. Depends only on what's registered, not on load order. A cycle runs by id, logged.
+	 */
+	static List<Modifier> order(List<Modifier> modifiers) {
+		List<Modifier> left = new ArrayList<>(modifiers);
+		left.sort(Comparator.comparing(m -> m.id().toString()));
+		Set<Identifier> registered = new HashSet<>(), done = new HashSet<>();
+		for (Modifier m : left) registered.add(m.id());
+		List<Modifier> out = new ArrayList<>(left.size());
+		while (!left.isEmpty()) {
+			Modifier next = null;
+			for (Modifier m : left) {
+				boolean ready = true;
+				for (Identifier a : m.after()) if (registered.contains(a) && !done.contains(a)) ready = false;
+				if (ready) {
+					next = m;
+					break;
+				}
+			}
+			if (next == null) {
+				next = left.getFirst();
+				SeedLod.LOG.warn("Seed LOD terrain modifiers {} wait on each other; running {} first", left.stream().map(Modifier::id).toList(), next.id());
+			}
+			left.remove(next);
+			done.add(next.id());
+			out.add(next);
+		}
+		return out;
 	}
 
 	/** The tree a plugin registered this feature's class as, or null. */
