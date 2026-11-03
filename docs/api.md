@@ -148,7 +148,14 @@ If your modifier throws, Seed LOD logs it once and carries on with the rest of t
 factory throws, the modifier is left out for that dimension.
 
 Modifiers run in order of id. That keeps the order the same on the server and its clients, whatever order the
-mods loaded in.
+mods loaded in. If yours reads another mod's edits (it styles ground beside that mod's water, say), say it runs after
+that modifier:
+
+```java
+registrar.terrainModifier(id, Set.of(Identifier.fromNamespaceAndPath("rivers", "channels")), RiverBanks::new);
+```
+
+Ids in `after` that nobody registered are ignored, so this needs no dependency on the other mod either.
 
 ## Tree features
 
