@@ -136,6 +136,24 @@ public final class TileGen implements AutoCloseable {
 		return cell;
 	}
 
+	/**
+	 * Lets go of buffers the last {@link DensityBufferPool#garbageCollect 20 calls} didn't use. Vanilla's pools are
+	 * aged every server tick; ours is held for the generator's whole life, so without this it keeps every size of
+	 * buffer it ever made.
+	 */
+	public void trimBuffers() {
+		this.bufferPool.garbageCollect();
+	}
+
+	/** Drops all scratch (buffers, spare tiles): for when there's nothing to generate for a while. */
+	public void releaseScratch() {
+		this.bufferPool.clear();
+		Arrays.fill(this.spareArea, null);
+		for (Tile[] tiles : this.spareTiles) Arrays.fill(tiles, null);
+		this.solid = new boolean[0];
+		this.top = new int[0];
+	}
+
 	/** One tile. It shares arrays with this generator's next result, so use it up before generating again. */
 	public Tile generate(int lvl, int tileX, int tileZ) {
 		return this.generate(lvl, tileX, tileZ, 0);

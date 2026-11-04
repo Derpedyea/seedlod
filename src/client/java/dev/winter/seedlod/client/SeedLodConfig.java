@@ -69,7 +69,13 @@ public final class SeedLodConfig {
 		return this.threads > 0 ? this.threads : autoThreads();
 	}
 
+	/**
+	 * Half the cores but one, and one per 2 GB of heap: a busy worker holds a few hundred MB of tiles and density
+	 * buffers, and at 4 GB seven of them starved the game (25k GC stalls a run, 2 threads: 190).
+	 */
 	static int autoThreads() {
-		return Math.max(1, Runtime.getRuntime().availableProcessors() / 2 - 1);
+		int byCores = Runtime.getRuntime().availableProcessors() / 2 - 1;
+		int byHeap = (int) (Runtime.getRuntime().maxMemory() / (2L << 30));
+		return Math.max(1, Math.min(byCores, byHeap));
 	}
 }
