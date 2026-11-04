@@ -171,7 +171,12 @@ final class Session {
 		try (TileGen gen = new TileGen(this.view).withBiomeBlend(this.biomeBlend)) {
 			VoxyWriter writer = new VoxyWriter(this.engine);
 			while (!this.stopped) {
-				Job job = this.queue.take();
+				Job job = this.queue.poll();
+				if (job == null) {
+					// Out of work (a fill is done or waiting on the player): hand the memory back while idle.
+					gen.releaseScratch();
+					job = this.queue.take();
+				}
 				long key = key(job.lvl, job.groupX, job.groupZ);
 				synchronized (this.done) {
 					this.inFlight.add(key);
@@ -182,6 +187,7 @@ final class Session {
 					while (!this.canWrite.getAsBoolean() && !this.stopped) Thread.sleep(20);
 					if (this.stopped || !this.engine.isLive()) break;
 					writer.writeGroup(group);
+					gen.trimBuffers();
 					this.tilesDone.addAndGet(4);
 					synchronized (this.done) {
 						this.done.add(key);
