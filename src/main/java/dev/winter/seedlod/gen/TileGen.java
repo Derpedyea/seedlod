@@ -61,6 +61,11 @@ public final class TileGen implements AutoCloseable {
 	/** Per-tile scratch, kept: a level 0 group's is megabytes, too big to allocate for every tile. */
 	private boolean[] solid = new boolean[0];
 	private int[] top = new int[0];
+	/** Last call's tiles, whose arrays the next call reuses (so what we return is only good until then). */
+	private final @Nullable Tile[] spareArea = new Tile[LEVELS];
+	private final @Nullable Tile[][] spareTiles = new Tile[LEVELS][4];
+	/** Voxy's levels, 0 to 4. */
+	private static final int LEVELS = 5;
 
 	public TileGen(WorldgenView view) {
 		this.view = view;
@@ -131,10 +136,16 @@ public final class TileGen implements AutoCloseable {
 		return cell;
 	}
 
+	/** One tile. It shares arrays with this generator's next result, so use it up before generating again. */
 	public Tile generate(int lvl, int tileX, int tileZ) {
+		return this.generate(lvl, tileX, tileZ, 0);
+	}
+
+	private Tile generate(int lvl, int tileX, int tileZ, int slot) {
 		WorldgenView previous = Hooks.enter(this.view);
 		try {
-			Tile tile = this.terrain(lvl, tileX * Tile.SIZE, tileZ * Tile.SIZE, Tile.SIZE);
+			Tile tile = this.terrain(lvl, tileX * Tile.SIZE, tileZ * Tile.SIZE, Tile.SIZE, this.spareTiles[lvl][slot]);
+			this.spareTiles[lvl][slot] = tile;
 			if (this.plantTrees) this.planter.plant(tile, tile.voxelX << lvl, tile.voxelZ << lvl, 1 << lvl);
 			return tile;
 		} finally {
@@ -149,22 +160,22 @@ public final class TileGen implements AutoCloseable {
 	public Tile[] generateGroup(int lvl, int groupX, int groupZ) {
 		Tile[] group = new Tile[4];
 		if (lvl > RealTrees.MAX_LEVEL || !this.plantTrees) {
-			for (int i = 0; i < 4; i++) group[i] = this.generate(lvl, groupX * 2 + (i & 1), groupZ * 2 + (i >> 1));
+			for (int i = 0; i < 4; i++) group[i] = this.generate(lvl, groupX * 2 + (i & 1), groupZ * 2 + (i >> 1), i);
 			return group;
 		}
 		WorldgenView previous = Hooks.enter(this.view);
 		try {
 			int margin = RealTrees.MARGIN >> lvl;
-			Tile area = this.terrain(lvl, groupX * 2 * Tile.SIZE - margin, groupZ * 2 * Tile.SIZE - margin, 2 * Tile.SIZE + 2 * margin);
+			Tile area = this.spareArea[lvl] = this.terrain(lvl, groupX * 2 * Tile.SIZE - margin, groupZ * 2 * Tile.SIZE - margin, 2 * Tile.SIZE + 2 * margin, this.spareArea[lvl]);
 			this.realTrees.plant(area, this.biomes);
-			for (int i = 0; i < 4; i++) group[i] = area.cut(groupX * 2 + (i & 1), groupZ * 2 + (i >> 1));
+			for (int i = 0; i < 4; i++) group[i] = this.spareTiles[lvl][i] = area.cut(groupX * 2 + (i & 1), groupZ * 2 + (i >> 1), this.spareTiles[lvl][i]);
 			return group;
 		} finally {
 			Hooks.exit(previous);
 		}
 	}
 
-	private Tile terrain(int lvl, int voxelX, int voxelZ, int size) {
+	private Tile terrain(int lvl, int voxelX, int voxelZ, int size, @Nullable Tile spare) {
 		int step = 1 << lvl;
 		int half = step >> 1;
 		int originX = voxelX * step;
@@ -172,7 +183,7 @@ public final class TileGen implements AutoCloseable {
 		int voxelMinY = Math.floorDiv(this.view.minY, step);
 		int voxelMaxY = Math.ceilDiv(this.view.minY + this.view.height, step);
 		int voxelsY = voxelMaxY - voxelMinY;
-		Tile tile = new Tile(lvl, voxelX, voxelZ, size, voxelMinY, voxelsY);
+		Tile tile = new Tile(lvl, voxelX, voxelZ, size, voxelMinY, voxelsY, spare, true);
 		this.biomeCache.clear();
 
 		if (this.solid.length < size * size * voxelsY) this.solid = new boolean[size * size * voxelsY];

@@ -1,5 +1,6 @@
 package dev.winter.seedlod.gen;
 
+import java.util.Arrays;
 import java.util.function.Predicate;
 import net.minecraft.core.Holder;
 import net.minecraft.world.level.biome.Biome;
@@ -38,8 +39,17 @@ public final class Tile {
 		this(lvl, tileX * SIZE, tileZ * SIZE, SIZE, voxelMinY, voxelsY);
 	}
 
-	@SuppressWarnings("unchecked")
 	Tile(int lvl, int voxelX, int voxelZ, int size, int voxelMinY, int voxelsY) {
+		this(lvl, voxelX, voxelZ, size, voxelMinY, voxelsY, null, false);
+	}
+
+	/**
+	 * Like a fresh tile, but on {@code spare}'s arrays when they're the right size (the generator recycles them:
+	 * a level 0 group is megabytes, and allocating that per group kept the GC busy). {@code clear} empties them;
+	 * pass false only when every voxel and column is written anyway.
+	 */
+	@SuppressWarnings("unchecked")
+	Tile(int lvl, int voxelX, int voxelZ, int size, int voxelMinY, int voxelsY, @Nullable Tile spare, boolean clear) {
 		this.lvl = lvl;
 		this.tileX = Math.floorDiv(voxelX, SIZE);
 		this.tileZ = Math.floorDiv(voxelZ, SIZE);
@@ -48,10 +58,23 @@ public final class Tile {
 		this.voxelZ = voxelZ;
 		this.voxelMinY = voxelMinY;
 		this.voxelsY = voxelsY;
-		this.states = new BlockState[size * size * voxelsY];
-		this.light = new byte[size * size * voxelsY];
-		this.biomes = new Holder[size * size];
-		this.tints = new Holder[size * size];
+		if (spare != null && spare.size == size && spare.voxelsY == voxelsY) {
+			this.states = spare.states;
+			this.light = spare.light;
+			this.biomes = spare.biomes;
+			this.tints = spare.tints;
+			if (clear) {
+				Arrays.fill(this.states, null);
+				Arrays.fill(this.light, (byte) 0);
+				Arrays.fill(this.biomes, null);
+				Arrays.fill(this.tints, null);
+			}
+		} else {
+			this.states = new BlockState[size * size * voxelsY];
+			this.light = new byte[size * size * voxelsY];
+			this.biomes = new Holder[size * size];
+			this.tints = new Holder[size * size];
+		}
 	}
 
 	public int index(int x, int y, int z) {
@@ -102,9 +125,9 @@ public final class Tile {
 		}
 	}
 
-	/** The regular tile (tileX, tileZ) out of this wider one. */
-	Tile cut(int tileX, int tileZ) {
-		Tile out = new Tile(this.lvl, tileX, tileZ, this.voxelMinY, this.voxelsY);
+	/** The regular tile (tileX, tileZ) out of this wider one, on {@code spare}'s arrays if they fit. */
+	Tile cut(int tileX, int tileZ, @Nullable Tile spare) {
+		Tile out = new Tile(this.lvl, tileX * SIZE, tileZ * SIZE, SIZE, this.voxelMinY, this.voxelsY, spare, false);
 		int offsetX = tileX * SIZE - this.voxelX, offsetZ = tileZ * SIZE - this.voxelZ;
 		for (int z = 0; z < SIZE; z++)
 			for (int x = 0; x < SIZE; x++) {
