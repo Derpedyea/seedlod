@@ -13,6 +13,7 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.FeatureSorter;
 import net.minecraft.world.level.levelgen.GenerationStep;
 import net.minecraft.world.level.levelgen.feature.FallenTreeFeature;
+import net.minecraft.world.level.levelgen.feature.SnowAndFreezeFeature;
 import net.minecraft.world.level.levelgen.feature.TreeFeature;
 import net.minecraft.world.level.levelgen.placement.PlacedFeature;
 
@@ -29,6 +30,7 @@ public final class BiomeFeatures {
 
 	private final Function<Holder<Biome>, List<HolderSet<PlacedFeature>>> lists;
 	private final Map<Holder<Biome>, Set<PlacedFeature>> sets = new ConcurrentHashMap<>();
+	private final Map<Holder<Biome>, Boolean> freezes = new ConcurrentHashMap<>();
 	/** Every tree-growing feature of the vegetation step, in the order vanilla runs them. */
 	final List<Indexed> trees;
 
@@ -56,6 +58,16 @@ public final class BiomeFeatures {
 			for (HolderSet<PlacedFeature> step : this.lists.apply(b)) for (Holder<PlacedFeature> f : step) all.add(f.value());
 			return all;
 		}).contains(feature);
+	}
+
+	/** Does the biome run vanilla's snow and ice pass ({@code freeze_top_layer}, see {@link Frost})? */
+	boolean freezes(Holder<Biome> biome) {
+		return this.freezes.computeIfAbsent(biome, b -> {
+			for (HolderSet<PlacedFeature> step : this.lists.apply(b))
+				for (Holder<PlacedFeature> f : step)
+					if (f.value().getFeatures().anyMatch(c -> c.value() instanceof SnowAndFreezeFeature)) return true;
+			return false;
+		});
 	}
 
 	private static boolean growsTrees(PlacedFeature feature) {

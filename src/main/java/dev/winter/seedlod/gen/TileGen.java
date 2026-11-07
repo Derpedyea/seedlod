@@ -48,6 +48,7 @@ public final class TileGen implements AutoCloseable {
 	private final BiomeCache biomeCache = new BiomeCache();
 	private final TreePlanter planter;
 	private final RealTrees realTrees;
+	private final Frost frost;
 	private final ModifiedArea modified;
 	private boolean plantTrees = true;
 	/**
@@ -87,10 +88,11 @@ public final class TileGen implements AutoCloseable {
 		this.rule = view.settings.materialRule().value().compile(this.ruleContext);
 		this.planter = new TreePlanter(view.trees, view.randomState.seed());
 		this.realTrees = new RealTrees(view);
+		this.frost = new Frost(view);
 		this.modified = new ModifiedArea(view);
 	}
 
-	/** Terrain only; trees come from data a server may not share identically with its clients. */
+	/** Terrain only; trees and frost come from biome features a server may not share identically with its clients. */
 	TileGen withoutTrees() {
 		this.plantTrees = false;
 		return this;
@@ -164,7 +166,10 @@ public final class TileGen implements AutoCloseable {
 		try {
 			Tile tile = this.terrain(lvl, tileX * Tile.SIZE, tileZ * Tile.SIZE, Tile.SIZE, this.spareTiles[lvl][slot]);
 			this.spareTiles[lvl][slot] = tile;
-			if (this.plantTrees) this.planter.plant(tile, tile.voxelX << lvl, tile.voxelZ << lvl, 1 << lvl);
+			if (this.plantTrees) {
+				this.planter.plant(tile, tile.voxelX << lvl, tile.voxelZ << lvl, 1 << lvl);
+				this.frost.apply(tile);
+			}
 			return tile;
 		} finally {
 			Hooks.exit(previous);
@@ -186,6 +191,7 @@ public final class TileGen implements AutoCloseable {
 			int margin = RealTrees.MARGIN >> lvl;
 			Tile area = this.spareArea[lvl] = this.terrain(lvl, groupX * 2 * Tile.SIZE - margin, groupZ * 2 * Tile.SIZE - margin, 2 * Tile.SIZE + 2 * margin, this.spareArea[lvl]);
 			this.realTrees.plant(area, this.biomes);
+			this.frost.apply(area);
 			for (int i = 0; i < 4; i++) group[i] = this.spareTiles[lvl][i] = area.cut(groupX * 2 + (i & 1), groupZ * 2 + (i >> 1), this.spareTiles[lvl][i]);
 			return group;
 		} finally {
