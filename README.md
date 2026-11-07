@@ -13,6 +13,7 @@ does the same from the seed but isn't open source. Seed LOD is an open-source ta
   only sample cheaply at their own cell size.
 - Runs the dimension's material (surface) rules on the top voxels: grass, sand, snow, badlands bands, mod biomes.
 - Adds trees from each biome's own vegetation features (count, height, crown shape, leaf and log blocks).
+- Then, like vanilla's last decoration pass, freezes cold biomes: ice on open water, snow on the ground and tree tops.
 - Writes each area at the level of detail Voxy will draw it at, worked out from your window size, field of view and
   Voxy's subdivision setting, down to one block per voxel close up. It fans out from the player at full detail
   instead of laying down a coarse blockout first; the coarser stand-in levels underneath come last. Close up, levels
