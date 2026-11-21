@@ -25,7 +25,8 @@ public final class Bench {
 		int px = tiles * Tile.SIZE;
 		int[] pixels = new int[px * px];
 		ExecutorService pool = Executors.newFixedThreadPool(threads);
-		ThreadLocal<TileGen> gens = ThreadLocal.withInitial(() -> new TileGen(view));
+		boolean structures = Boolean.parseBoolean(System.getProperty("seedlod.structures", "true"));
+		ThreadLocal<TileGen> gens = ThreadLocal.withInitial(() -> new TileGen(view).withStructures(structures));
 		long tileHash, groupHash;
 		double ms, groupMs;
 		try {

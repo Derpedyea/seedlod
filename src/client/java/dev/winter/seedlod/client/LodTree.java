@@ -88,7 +88,10 @@ public final class LodTree {
 	 * to replace. A voxel never spans more than one chunk (levels 0 to 4 are 1 to 16 blocks).
 	 */
 	static boolean[] ourColumns(RealChunks real, int lvl, int sectionX, int sectionZ, long[] raw) {
-		boolean[] ours = new boolean[32 * 32];
+		return ourColumns(real, lvl, sectionX, sectionZ, raw, new boolean[32 * 32]);
+	}
+
+	static boolean[] ourColumns(RealChunks real, int lvl, int sectionX, int sectionZ, long[] raw, boolean[] ours) {
 		int span = 16 >> lvl;
 		for (int cz = 0; cz < 32; cz += span)
 			for (int cx = 0; cx < 32; cx += span) {
@@ -244,14 +247,16 @@ public final class LodTree {
 	 */
 	public static void prepareRealInsert(WorldEngine engine, int sx, int sy, int sz) {
 		for (int lvl = WorldEngine.MAX_LOD_LAYER; lvl >= 1; lvl--) {
-			WorldSection section = engine.acquire(lvl, sx >> (lvl + 1), sy >> (lvl + 1), sz >> (lvl + 1));
+			WorldSection section = engine.acquireIfExists(lvl, sx >> (lvl + 1), sy >> (lvl + 1), sz >> (lvl + 1));
+			if (section == null) continue;
 			try {
-				long[] data = section._unsafeGetRawDataArray();
-				boolean leaf = section.getNonEmptyChildren() == 0;
-				if (leaf && !hasBlocks(data)) continue;
+				byte children = section.getNonEmptyChildren();
 				int shift = lvl;  // child coordinate = chunk section coordinate >> lvl
 				int path = childBit((sx >> shift) & 1, (sy >> shift) & 1, (sz >> shift) & 1);
-				fillOctants(engine, section, data, leaf ? 0xFF : path);
+				if (children != 0 && (children & path) != 0) continue;
+				long[] data = section._unsafeGetRawDataArray();
+				if (children == 0 && !hasBlocks(data)) continue;
+				fillOctants(engine, section, data, children == 0 ? 0xFF : path);
 			} finally {
 				section.release();
 			}

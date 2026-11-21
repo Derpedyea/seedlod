@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.winter.seedlod.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["CappedProcessorMixin", "EntityTypeMixin", "FallenTreeFeatureMixin", "JigsawPlacementMixin", "JigsawPlacerMixin", "StructurePaletteMixin", "StructurePieceMixin", "StructureTemplateMixin", "TemplateStructurePieceMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

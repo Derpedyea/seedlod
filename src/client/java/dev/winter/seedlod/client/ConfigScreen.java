@@ -45,6 +45,11 @@ final class ConfigScreen {
 			.setTooltip(Component.translatable("seedlod.config.biomeBlend.tooltip"))
 			.setSaveConsumer(v -> config.biomeBlend = v)
 			.build());
+		general.addEntry(entries.startBooleanToggle(Component.translatable("seedlod.config.structures"), config.structures)
+			.setDefaultValue(true)
+			.setTooltip(Component.translatable("seedlod.config.structures.tooltip"))
+			.setSaveConsumer(v -> config.structures = v)
+			.build());
 		return builder.build();
 	}
 

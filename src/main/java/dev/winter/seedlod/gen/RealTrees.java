@@ -2,24 +2,19 @@ package dev.winter.seedlod.gen;
 
 import com.mojang.serialization.MapCodec;
 import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.SectionPos;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.util.RandomSource;
-import net.minecraft.world.level.LightLayer;
-import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.biome.Biome;
-import net.minecraft.world.level.biome.BiomeManager;
 import net.minecraft.world.level.biome.BiomeResolver;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -49,44 +44,76 @@ public final class RealTrees {
 	/** Set while planting without a live level, for mods that look at it (see the client's StreamsSettingsMixin). */
 	public static final ThreadLocal<Boolean> NO_LEVEL = ThreadLocal.withInitial(() -> false);
 
-	/** Marks the level trees are planted in, for code that has to tell it from a real one ({@code SeedLodApi.isSeedLodLevel}). */
+	/** Marks the level trees and structures are staged in, for code that has to tell it from a real one ({@code SeedLodApi.isSeedLodLevel}). */
 	public interface Staged {
 	}
+
+	private static final int UNKNOWN = Integer.MIN_VALUE;
 
 	private final WorldgenView view;
 	private final int minSectionY;
 	/** Tree features with vanilla's biome filter swapped for one reading {@link BiomeFeatures}. */
 	private final Map<PlacedFeature, PlacedFeature> filtered = new IdentityHashMap<>();
+	private final Stage stage;
+	private final FeaturePlacer placer;
+	private final WorldgenRandom random = new WorldgenRandom(new XoroshiroRandomSource(0));
+	private final Set<Holder<Biome>> areaBiomes = new ReferenceOpenHashSet<>();
+	private final Set<Holder<Biome>> nearby = new ReferenceOpenHashSet<>();
+	private final List<BiomeFeatures.Indexed> activeTrees = new ArrayList<>();
 
-	RealTrees(WorldgenView view) {
+	RealTrees(WorldgenView view, BiomeResolver biomes) {
 		this.view = view;
 		this.minSectionY = SectionPos.blockToSectionCoord(view.minY);
+		this.stage = new Stage(view, biomes);
+		this.placer = new FeaturePlacer(this.stage, view.generator);
 	}
 
-	void plant(Tile area, BiomeResolver biomes) {
-		Stage stage = new Stage(area, new BiomeManager(biomes, BiomeManager.obfuscateSeed(this.view.seed)));
-		FeaturePlacer placer = new FeaturePlacer(stage.level, this.view.generator);
-		WorldgenRandom random = new WorldgenRandom(new XoroshiroRandomSource(0));
-		Set<Holder<Biome>> nearby = new ReferenceOpenHashSet<>();
-		int minX = stage.minX, minZ = stage.minZ, span = stage.span;
+	void releaseScratch() {
+		Arrays.fill(this.stage.tops, null);
+		this.stage.area = null;
+	}
+
+	void plant(Tile area) {
+		// Pre-collect biomes present in this area so barren areas (ocean, desert, beach) skip the chunk loop completely,
+		// and active areas only iterate tree features that can actually grow here.
+		this.areaBiomes.clear();
+		for (Holder<Biome> biome : area.biomes) if (biome != null) this.areaBiomes.add(biome);
+		if (this.areaBiomes.isEmpty()) return;
+
+		this.activeTrees.clear();
+		for (BiomeFeatures.Indexed tree : this.view.features.trees) {
+			if (this.anyHas(this.areaBiomes, tree.feature())) this.activeTrees.add(tree);
+		}
+		if (this.activeTrees.isEmpty()) return;
+
+		this.stage.bind(area);
+		int minX = this.stage.minX, minZ = this.stage.minZ, span = this.stage.span;
+		boolean singleBiome = this.areaBiomes.size() == 1;
+		int scanStep = Math.max(4, this.stage.step);
 		NO_LEVEL.set(this.view.level == null);
 		try {
 			for (int cz = Math.floorDiv(minZ, 16); cz <= Math.floorDiv(minZ + span - 1, 16); cz++)
 				for (int cx = Math.floorDiv(minX, 16); cx <= Math.floorDiv(minX + span - 1, 16); cx++) {
-					// Vanilla only runs the features of biomes in and around the chunk; its biome filter does the rest.
-					nearby.clear();
-					for (int z = cz * 16 - 16; z < cz * 16 + 32; z += 4)
-						for (int x = cx * 16 - 16; x < cx * 16 + 32; x += 4) {
-							Holder<Biome> biome = stage.surfaceBiome(x, z);
-							if (biome != null) nearby.add(biome);
-						}
+					Set<Holder<Biome>> present;
+					if (singleBiome) {
+						present = this.areaBiomes;
+					} else {
+						// Vanilla only runs the features of biomes in and around the chunk; its biome filter does the rest.
+						this.nearby.clear();
+						for (int z = cz * 16 - 16; z < cz * 16 + 32; z += scanStep)
+							for (int x = cx * 16 - 16; x < cx * 16 + 32; x += scanStep) {
+								Holder<Biome> biome = this.stage.surfaceBiome(x, z);
+								if (biome != null) this.nearby.add(biome);
+							}
+						present = this.nearby;
+					}
 					BlockPos origin = new BlockPos(cx * 16, this.minSectionY * 16, cz * 16);
-					long decorationSeed = random.setDecorationSeed(this.view.seed, origin.getX(), origin.getZ());
-					for (BiomeFeatures.Indexed tree : this.view.features.trees) {
-						if (!this.anyHas(nearby, tree.feature())) continue;
-						random.setFeatureSeed(decorationSeed, tree.index(), BiomeFeatures.STEP);
+					long decorationSeed = this.random.setDecorationSeed(this.view.seed, origin.getX(), origin.getZ());
+					for (BiomeFeatures.Indexed tree : this.activeTrees) {
+						if (!singleBiome && !this.anyHas(present, tree.feature())) continue;
+						this.random.setFeatureSeed(decorationSeed, tree.index(), BiomeFeatures.STEP);
 						try {
-							placer.place(this.filtered(tree.feature()), random, origin);
+							this.placer.place(this.filtered(tree.feature()), this.random, origin);
 						} catch (RuntimeException e) {
 							Hooks.report("A tree feature failed on Seed LOD's terrain; skipping it where it does", e);
 						}
@@ -94,6 +121,7 @@ public final class RealTrees {
 				}
 		} finally {
 			NO_LEVEL.set(false);
+			this.stage.area = null;
 		}
 	}
 
@@ -123,30 +151,31 @@ public final class RealTrees {
 		}
 	}
 
-	private static final int UNKNOWN = Integer.MIN_VALUE;
-
-	/** The level features see: the tile's voxels in block coordinates, and nothing outside it. */
-	private final class Stage implements InvocationHandler {
-		final Tile area;
-		final int step, minX, minZ, span;
-		final BiomeManager biomes;
-		final RandomSource random = RandomSource.create(0);
-		final WorldGenLevel level;
-		/** Cached {@link #height} per heightmap type and column. */
+	/** Concrete {@link StagedLevel} over the current tile's voxels; reused across groups on this thread. */
+	private static final class Stage extends StagedLevel {
+		Tile area;
+		int step, minX, minZ, span;
+		/** Cached {@link #getHeight} per heightmap type and column, resized lazily. */
 		final int[][] tops = new int[Heightmap.Types.values().length][];
 
-		Stage(Tile area, BiomeManager biomes) {
+		Stage(WorldgenView view, BiomeResolver biomes) {
+			super(view, biomes);
+		}
+
+		void bind(Tile area) {
 			this.area = area;
 			this.step = 1 << area.lvl;
 			this.minX = area.voxelX * this.step;
 			this.minZ = area.voxelZ * this.step;
 			this.span = area.size * this.step;
-			this.biomes = biomes;
-			this.level = (WorldGenLevel) Proxy.newProxyInstance(RealTrees.class.getClassLoader(), new Class<?>[]{WorldGenLevel.class, Staged.class}, this);
-		}
-
-		int index(BlockPos pos) {
-			return this.area.blockIndex(pos.getX(), pos.getY(), pos.getZ());
+			int columns = area.size * area.size;
+			for (int i = 0; i < this.tops.length; i++) {
+				int[] cached = this.tops[i];
+				if (cached != null) {
+					if (cached.length < columns) this.tops[i] = null;
+					else Arrays.fill(cached, 0, columns, UNKNOWN);
+				}
+			}
 		}
 
 		Holder<Biome> surfaceBiome(int x, int z) {
@@ -154,14 +183,16 @@ public final class RealTrees {
 			return column < 0 ? null : this.area.biomes[column];
 		}
 
-		BlockState get(BlockPos pos) {
-			int index = this.index(pos);
+		@Override
+		public BlockState getBlockState(BlockPos pos) {
+			int index = this.area.blockIndex(pos.getX(), pos.getY(), pos.getZ());
 			BlockState state = index < 0 ? null : this.area.states[index];
 			return state == null ? Blocks.AIR.defaultBlockState() : state;
 		}
 
-		boolean set(BlockPos pos, BlockState state) {
-			int index = this.index(pos);
+		@Override
+		public boolean setBlock(BlockPos pos, BlockState state, int flags, int recursionLeft) {
+			int index = this.area.blockIndex(pos.getX(), pos.getY(), pos.getZ());
 			if (index < 0) return false;
 			BlockState current = this.area.states[index];
 			if (this.area.lvl > 0) {
@@ -170,90 +201,35 @@ public final class RealTrees {
 			}
 			this.area.states[index] = state.isAir() ? null : state;
 			this.area.light[index] = 15;
-			for (int[] tops : this.tops) if (tops != null) tops[index / this.area.voxelsY] = UNKNOWN;
+			int column = index / this.area.voxelsY;
+			for (int[] tops : this.tops) if (tops != null) tops[column] = UNKNOWN;
 			return true;
 		}
 
-		/** Like a chunk's heightmap: the block above the highest one {@code type} counts. */
-		int height(Heightmap.Types type, int x, int z) {
+		@Override
+		public int getHeight(Heightmap.Types type, int x, int z) {
 			int column = this.area.column(x, z);
-			if (column < 0) return view.minY;
-			// Features ask for the same columns over and over; remember each answer until a block is set there.
-			int[] tops = this.tops[type.ordinal()];
+			if (column < 0) return this.view.minY;
+			int ordinal = type.ordinal();
+			int[] tops = this.tops[ordinal];
 			if (tops == null) {
-				tops = this.tops[type.ordinal()] = new int[this.area.size * this.area.size];
+				tops = this.tops[ordinal] = new int[this.area.size * this.area.size];
 				Arrays.fill(tops, UNKNOWN);
 			}
 			int top = tops[column];
 			if (top != UNKNOWN) return top;
-			return tops[column] = this.area.height(column, type.isOpaque(), view.minY);
+			return tops[column] = this.area.height(column, type.isOpaque(), this.view.minY);
 		}
 
 		@Override
-		@SuppressWarnings("unchecked")
-		public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-			int arity = args == null ? 0 : args.length;
-			switch (method.getName()) {
-				case "getBlockState":
-					return this.get((BlockPos) args[0]);
-				case "getFluidState":
-					return this.get((BlockPos) args[0]).getFluidState();
-				case "isStateAtPosition":
-					return ((Predicate<BlockState>) args[1]).test(this.get((BlockPos) args[0]));
-				case "isFluidAtPosition":
-					return ((Predicate<Object>) args[1]).test(this.get((BlockPos) args[0]).getFluidState());
-				case "setBlock":
-					return this.set((BlockPos) args[0], (BlockState) args[1]);
-				case "removeBlock", "destroyBlock":
-					return this.set((BlockPos) args[0], Blocks.AIR.defaultBlockState());
-				case "getHeight":
-					if (arity == 3) return this.height((Heightmap.Types) args[0], (int) args[1], (int) args[2]);
-					if (arity == 0) return view.height;
-					break;
-				case "getMinY":
-					if (arity == 0) return view.minY;
-					break;
-				case "getSeaLevel":
-					return view.seaLevel;
-				case "getLevel":
-					if (view.level != null) return view.level;
-					break;
-				case "registryAccess":
-					return view.registries;
-				case "getBrightness":
-					// Features run before light, so assume open sky and no block light.
-					return args[0] == LightLayer.SKY ? 15 : 0;
-				case "getRawBrightness":
-					return Math.max(0, 15 - (int) args[1]);
-				case "canSeeSky":
-					return true;
-				case "getSeed":
-					return view.seed;
-				case "getRandom":
-					return this.random;
-				case "getBiome":
-					if (arity == 1) return this.biomes.getBiome((BlockPos) args[0]);
-					break;
-				case "getBlockEntity":
-					if (arity == 1) return null;
-					break;
-				case "ensureCanWrite":
-					return this.index((BlockPos) args[0]) >= 0;
-				case "isClientSide":
-					return false;
-				case "setCurrentlyGenerating", "blockUpdated", "updateNeighborsAt", "scheduleTick", "gameEvent", "neighborShapeChanged",
-					"markPosForPostprocessing", "levelEvent", "playSound", "addParticle":
-					return null;
-				case "hashCode":
-					return System.identityHashCode(proxy);
-				case "equals":
-					return proxy == args[0];
-				case "toString":
-					return "Seed LOD terrain";
-				default:
-			}
-			if (method.isDefault()) return InvocationHandler.invokeDefault(proxy, method, args);
-			throw new UnsupportedOperationException("Seed LOD's terrain doesn't do " + method.getName());
+		public boolean ensureCanWrite(BlockPos pos) {
+			return this.area.blockIndex(pos.getX(), pos.getY(), pos.getZ()) >= 0;
+		}
+
+		@Override
+		public ServerLevel getLevel() {
+			if (this.view.level != null) return this.view.level;
+			throw new UnsupportedOperationException("Seed LOD's terrain has no live ServerLevel");
 		}
 	}
 }

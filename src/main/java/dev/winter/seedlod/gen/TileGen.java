@@ -48,9 +48,11 @@ public final class TileGen implements AutoCloseable {
 	private final BiomeCache biomeCache = new BiomeCache();
 	private final TreePlanter planter;
 	private final RealTrees realTrees;
+	private final StructureBaker structures;
 	private final Frost frost;
 	private final ModifiedArea modified;
 	private boolean plantTrees = true;
+	private boolean placeStructures = true;
 	/**
 	 * Voxy tints a voxel with one biome's colour, with no blending, so borders show as steps of whole voxels. Each
 	 * column's tint biome is instead read up to this many blocks (plus one voxel) away, at a hashed spot: borders
@@ -62,6 +64,7 @@ public final class TileGen implements AutoCloseable {
 	/** Per-tile scratch, kept: a level 0 group's is megabytes, too big to allocate for every tile. */
 	private boolean[] solid = new boolean[0];
 	private int[] top = new int[0];
+	private int[] topVoxel = new int[0];
 	/** Last call's tiles, whose arrays the next call reuses (so what we return is only good until then). */
 	private final @Nullable Tile[] spareArea = new Tile[LEVELS];
 	private final @Nullable Tile[][] spareTiles = new Tile[LEVELS][4];
@@ -78,7 +81,8 @@ public final class TileGen implements AutoCloseable {
 		int[] cell = interpolationCell(view.settings.noiseRouter().finalDensity());
 		this.cellXz = cell[0];
 		this.cellY = cell[1];
-		this.biomes = view.biomes.createResolver(view.randomState.createClimateSampler(context));
+		var climate = view.randomState.createClimateSampler(context);
+		this.biomes = view.biomes.createResolver(climate);
 		// A single-block expected volume keeps rules that prefill a whole chunk (ore veins) from sampling anything up
 		// front; they fall back to sampling the few positions we actually ask about.
 		this.ruleContext = new MaterialRuleContext(
@@ -87,14 +91,22 @@ public final class TileGen implements AutoCloseable {
 		);
 		this.rule = view.settings.materialRule().value().compile(this.ruleContext);
 		this.planter = new TreePlanter(view.trees, view.randomState.seed());
-		this.realTrees = new RealTrees(view);
+		this.realTrees = new RealTrees(view, this.biomes);
+		this.structures = new StructureBaker(view, this.exactDensity, this.strideDensity, climate, this.biomes);
 		this.frost = new Frost(view);
 		this.modified = new ModifiedArea(view);
 	}
 
-	/** Terrain only; trees and frost come from biome features a server may not share identically with its clients. */
+	/** Terrain only; trees, structures and frost aren't part of the server/client terrain fingerprint. */
 	TileGen withoutTrees() {
 		this.plantTrees = false;
+		this.placeStructures = false;
+		return this;
+	}
+
+	/** Whether to place surface structures into generated tiles. */
+	public TileGen withStructures(boolean enabled) {
+		this.placeStructures = enabled;
 		return this;
 	}
 
@@ -154,6 +166,10 @@ public final class TileGen implements AutoCloseable {
 		for (Tile[] tiles : this.spareTiles) Arrays.fill(tiles, null);
 		this.solid = new boolean[0];
 		this.top = new int[0];
+		this.topVoxel = new int[0];
+		this.biomeCache.clear();
+		this.realTrees.releaseScratch();
+		this.structures.releaseScratch();
 	}
 
 	/** One tile. It shares arrays with this generator's next result, so use it up before generating again. */
@@ -166,10 +182,9 @@ public final class TileGen implements AutoCloseable {
 		try {
 			Tile tile = this.terrain(lvl, tileX * Tile.SIZE, tileZ * Tile.SIZE, Tile.SIZE, this.spareTiles[lvl][slot]);
 			this.spareTiles[lvl][slot] = tile;
-			if (this.plantTrees) {
-				this.planter.plant(tile, tile.voxelX << lvl, tile.voxelZ << lvl, 1 << lvl);
-				this.frost.apply(tile);
-			}
+			if (this.plantTrees) this.planter.plant(tile, tile.voxelX << lvl, tile.voxelZ << lvl, 1 << lvl);
+			if (this.placeStructures) this.structures.place(tile);
+			if (this.plantTrees) this.frost.apply(tile);
 			return tile;
 		} finally {
 			Hooks.exit(previous);
@@ -190,7 +205,8 @@ public final class TileGen implements AutoCloseable {
 		try {
 			int margin = RealTrees.MARGIN >> lvl;
 			Tile area = this.spareArea[lvl] = this.terrain(lvl, groupX * 2 * Tile.SIZE - margin, groupZ * 2 * Tile.SIZE - margin, 2 * Tile.SIZE + 2 * margin, this.spareArea[lvl]);
-			this.realTrees.plant(area, this.biomes);
+			if (this.placeStructures) this.structures.place(area);
+			this.realTrees.plant(area);
 			this.frost.apply(area);
 			for (int i = 0; i < 4; i++) group[i] = this.spareTiles[lvl][i] = area.cut(groupX * 2 + (i & 1), groupZ * 2 + (i >> 1), this.spareTiles[lvl][i]);
 			return group;
@@ -208,24 +224,33 @@ public final class TileGen implements AutoCloseable {
 		int voxelMaxY = Math.ceilDiv(this.view.minY + this.view.height, step);
 		int voxelsY = voxelMaxY - voxelMinY;
 		Tile tile = new Tile(lvl, voxelX, voxelZ, size, voxelMinY, voxelsY, spare, true);
-		this.biomeCache.clear();
+		this.biomeCache.maybeTrim();
 
 		if (this.solid.length < size * size * voxelsY) this.solid = new boolean[size * size * voxelsY];
 		boolean[] solid = this.solid;
 		Arrays.fill(solid, 0, size * size * voxelsY, false);
-		this.sampleSolid(tile, solid, originX, originZ, step);
+		int bandLo = this.sampleSolid(tile, solid, originX, originZ, step);
 
 		// Height of the top solid voxel per column, in blocks; feeds the rules' slope checks.
-		if (this.top.length < size * size) this.top = new int[size * size];
+		if (this.top.length < size * size) {
+			this.top = new int[size * size];
+			this.topVoxel = new int[size * size];
+		}
 		int[] top = this.top;
+		int[] topVoxel = this.topVoxel;
 		for (int z = 0; z < size; z++) {
 			for (int x = 0; x < size; x++) {
+				int column = x + z * size;
+				int base = column * voxelsY;
 				int y = voxelsY - 1;
-				while (y >= 0 && !solid[tile.index(x, y, z)]) y--;
-				top[x + z * size] = y < 0 ? this.view.minY : (voxelMinY + y) * step + step - 1;
+				while (y >= 0 && !solid[base + y]) y--;
+				topVoxel[column] = y;
+				top[column] = y < 0 ? this.view.minY : (voxelMinY + y) * step + step - 1;
 			}
 		}
 
+		int seaVoxel = this.view.defaultFluid.isAir() ? -1
+			: Math.clamp(Math.floorDiv(this.view.seaLevel - 1 - half, step) - voxelMinY, -1, voxelsY - 1);
 		for (int z = 0; z < size; z++) {
 			int blockZ = originZ + z * step + half;
 			for (int x = 0; x < size; x++) {
@@ -240,7 +265,7 @@ public final class TileGen implements AutoCloseable {
 				int gradientX = (top[Math.min(x + 1, size - 1) + z * size] - top[Math.max(x - 1, 0) + z * size]) / step;
 				int gradientZ = (top[x + Math.min(z + 1, size - 1) * size] - top[x + Math.max(z - 1, 0) * size]) / step;
 				this.ruleContext.updateXZ(blockX, blockZ, gradientX, gradientZ);
-				this.fillColumn(tile, solid, x, z, blockX, blockZ, step);
+				this.fillColumn(tile, solid, column, topVoxel[column], bandLo, seaVoxel, blockX, blockZ, step);
 			}
 		}
 		// Before trees, so they grow on the edited ground.
@@ -274,7 +299,7 @@ public final class TileGen implements AutoCloseable {
 	 * {@link #extendBand}), so the scout's spacing costs nothing but time. Anything floating clear of the band (a
 	 * thin sliver of overhang) can be missed, which a LOD can live with.
 	 */
-	private void sampleSolid(Tile tile, boolean[] solid, int originX, int originZ, int step) {
+	private int sampleSolid(Tile tile, boolean[] solid, int originX, int originZ, int step) {
 		// Interpolation only evaluates the noise at cell corners (every 4x8x4 blocks) and blends the rest, so at fine
 		// strides it's both what chunks look like and far cheaper than evaluating every voxel. At coarse strides the
 		// blend would be done for every block underneath, so there the noise is sampled at the voxels directly.
@@ -282,21 +307,27 @@ public final class TileGen implements AutoCloseable {
 		int half = step >> 1;
 		int voxelMinY = tile.voxelMinY, voxelsY = tile.voxelsY;
 		int bandLo = 0, bandHi = voxelsY - 1;
-		int scoutEvery = SCOUT_BLOCKS / step;
 		if (tile.lvl <= EXACT_MAX_LEVEL && this.cellXz > 0) {
 			int[] band = this.scoutCells(tile, originX, originZ, step);
-			if (band == null) return;
+			if (band == null) return 0;
 			bandLo = band[0];
 			bandHi = band[1];
-			for (int column = 0; column < tile.size * tile.size; column++)
-				for (int y = 0; y < bandLo; y++) solid[y + column * voxelsY] = true;
-		} else if (scoutEvery >= 2) {
-			int scouts = Math.ceilDiv(voxelsY, scoutEvery);
-			// Sideways too: one scout column per scoutEvery voxels (the last may land past the tile's edge).
-			int across = Math.ceilDiv(tile.size - 1, scoutEvery) + 1;
-			int spacing = scoutEvery * step;
+			if (bandLo > 0) {
+				for (int column = 0; column < tile.size * tile.size; column++)
+					Arrays.fill(solid, column * voxelsY, column * voxelsY + bandLo, true);
+			}
+		} else if (this.plantTrees || SCOUT_BLOCKS / step >= 2) {
+			// At lvl 3-4 scout every 2 voxels in Y (16/32b) and every 4 voxels in XZ (32/64b) so lvl 4 avoids sampling
+			// empty sky and deep rock, and lvl 3's scout volume shrinks 3.6x. extendBand catches peaks/valleys between scouts.
+			// Kept off in withoutTrees() (Fingerprint) so lvl-4 fingerprint shape stays compatible with 0.5.2 servers.
+			int scoutY = Math.max(2, SCOUT_BLOCKS / step);
+			int scoutXz = Math.max(4, SCOUT_BLOCKS / step);
+			int scouts = Math.ceilDiv(voxelsY, scoutY);
+			int across = Math.ceilDiv(tile.size - 1, scoutXz) + 1;
+			int spacingXz = scoutXz * step;
+			int spacingY = scoutY * step;
 			DensityVolume scout = new DensityVolume(
-				across, scouts, across, originX + half, voxelMinY * step + half, originZ + half, spacing, SCOUT_BLOCKS, spacing
+				across, scouts, across, originX + half, voxelMinY * step + half, originZ + half, spacingXz, spacingY, spacingXz
 			);
 			// The band spans every column's topmost solid scout. Caves under that are left solid: nobody sees them.
 			int lowestTop = scouts, highestSolid = -1;
@@ -309,17 +340,19 @@ public final class TileGen implements AutoCloseable {
 					highestSolid = Math.max(highestSolid, y);
 				}
 			}
-			if (highestSolid < 0) return;
+			if (highestSolid < 0) return 0;
 			// One scout step of slack either side: the surface can sit anywhere between two scouts.
-			bandLo = Math.clamp((long) (lowestTop - 1) * scoutEvery, 0, voxelsY - 1);
-			bandHi = Math.clamp((long) (highestSolid + 2) * scoutEvery - 1, bandLo, voxelsY - 1);
-			for (int column = 0; column < tile.size * tile.size; column++)
-				for (int y = 0; y < bandLo; y++) solid[y + column * voxelsY] = true;
+			bandLo = Math.clamp((long) (lowestTop - 1) * scoutY, 0, voxelsY - 1);
+			bandHi = Math.clamp((long) (highestSolid + 2) * scoutY - 1, bandLo, voxelsY - 1);
+			if (bandLo > 0) {
+				for (int column = 0; column < tile.size * tile.size; column++)
+					Arrays.fill(solid, column * voxelsY, column * voxelsY + bandLo, true);
+			}
 		}
 		if (this.cellXz == step && this.cellY > step && this.cellY % step == 0) {
 			this.sampleBandFromCorners(tile, solid, originX, originZ, step, bandLo, bandHi);
 			this.extendBand(tile, solid, this.exactDensity, originX, originZ, step, bandLo, bandHi);
-			return;
+			return bandLo;
 		}
 		int bandSize = bandHi - bandLo + 1;
 		DensityVolume volume = new DensityVolume(
@@ -330,6 +363,7 @@ public final class TileGen implements AutoCloseable {
 				for (int y = 0; y < bandSize; y++) solid[bandLo + y + column * voxelsY] = buffer.get(y + column * bandSize) > 0.0F;
 		}
 		this.extendBand(tile, solid, density, originX, originZ, step, bandLo, bandHi);
+		return bandLo;
 	}
 
 	/**
@@ -444,44 +478,62 @@ public final class TileGen implements AutoCloseable {
 	}
 
 	/** Mirrors vanilla's surface pass over one column, top down, in voxel steps. */
-	private void fillColumn(Tile tile, boolean[] solid, int x, int z, int blockX, int blockZ, int step) {
+	private void fillColumn(Tile tile, boolean[] solid, int column, int topVoxel, int bandLo, int seaVoxel, int blockX, int blockZ, int step) {
+		int voxelsY = tile.voxelsY;
+		int base = column * voxelsY;
+		int startY = Math.max(topVoxel, seaVoxel);
+		// Everything above both terrain and sea level is open sky.
+		if (startY + 1 < voxelsY) Arrays.fill(tile.light, base + startY + 1, base + voxelsY, (byte) 15);
+		if (startY < 0) return;
+
 		int half = step >> 1;
 		int seaLevel = this.view.seaLevel;
+		int solidFloor = topVoxel >= bandLo ? bandLo : 0;
 		int stoneAbove = 0;
 		int waterHeight = Integer.MIN_VALUE;
 		int ceilingY = Integer.MAX_VALUE;
-		for (int y = tile.voxelsY - 1; y >= 0; y--) {
-			int index = tile.index(x, y, z);
+		@Nullable BlockState[] states = tile.states;
+		byte[] light = tile.light;
+		BlockState defaultBlock = this.view.defaultBlock;
+
+		for (int y = startY; y >= 0; y--) {
+			int index = base + y;
 			int blockY = (tile.voxelMinY + y) * step + half;
 			if (!solid[index]) {
 				stoneAbove = 0;
 				if (blockY < seaLevel) {
 					if (waterHeight == Integer.MIN_VALUE) waterHeight = Math.min(seaLevel, (tile.voxelMinY + y + 1) * step);
-					tile.states[index] = this.view.defaultFluid;
+					states[index] = this.view.defaultFluid;
 					// Light at the voxel's top, so the surface voxel is fully lit however coarse the level.
-					tile.light[index] = (byte) Mth.clamp(15 - (waterHeight - (tile.voxelMinY + y + 1) * step), 0, 15);
+					light[index] = (byte) Mth.clamp(15 - (waterHeight - (tile.voxelMinY + y + 1) * step), 0, 15);
 				} else {
 					waterHeight = Integer.MIN_VALUE;
-					tile.light[index] = 15;
+					light[index] = 15;
 				}
 				continue;
 			}
 
 			if (ceilingY >= y) {
 				int below = y - 1;
-				while (below >= 0 && solid[tile.index(x, below, z)]) below--;
-				ceilingY = below + 1;
+				while (below >= solidFloor && solid[base + below]) below--;
+				ceilingY = below < solidFloor ? 0 : below + 1;
 			}
 			int depthAbove = stoneAbove == 0 ? 1 : 1 + stoneAbove * step;
-			int depthBelow = (y - ceilingY) * step + 1;
 			stoneAbove++;
 
+			// Deep solid rock touching the world floor is out of sight: bulk-fill the rest of the column.
+			if (depthAbove > RULE_DEPTH_BLOCKS && ceilingY == 0) {
+				Arrays.fill(states, base, base + y + 1, defaultBlock);
+				return;
+			}
+
+			int depthBelow = (y - ceilingY) * step + 1;
 			BlockState state = null;
-			if (depthAbove <= RULE_DEPTH_BLOCKS || depthBelow <= RULE_DEPTH_BLOCKS) {
+			if (depthAbove <= RULE_DEPTH_BLOCKS || (ceilingY > 0 && depthBelow <= RULE_DEPTH_BLOCKS)) {
 				this.ruleContext.updateY(depthAbove, depthBelow, waterHeight, blockY);
 				state = this.rule.tryApply(blockX, blockY, blockZ);
 			}
-			tile.states[index] = state != null ? state : this.view.defaultBlock;
+			states[index] = state != null ? state : defaultBlock;
 		}
 	}
 
@@ -495,11 +547,17 @@ public final class TileGen implements AutoCloseable {
 	 * surface biome, looked up once per quart column (4x4 blocks), as vanilla's biome storage is laid out.
 	 */
 	private final class BiomeCache {
+		private static final int MAX_QUARTS = 16_384;
 		private final Long2ObjectOpenHashMap<Holder<Biome>> quarts = new Long2ObjectOpenHashMap<>();
 		private Holder<Biome> column;
 
 		void clear() {
 			this.quarts.clear();
+			this.quarts.trim();
+		}
+
+		void maybeTrim() {
+			if (this.quarts.size() > MAX_QUARTS) this.quarts.clear();
 		}
 
 		/** Sets the column the rules ask about. */

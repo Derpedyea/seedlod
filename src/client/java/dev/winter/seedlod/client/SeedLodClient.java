@@ -40,7 +40,7 @@ public final class SeedLodClient implements ClientModInitializer {
 		ClientTickEvents.END_CLIENT_TICK.register(SeedLodClient::tick);
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			stop();
-			remote = null;
+			closeRemote();
 		});
 		ClientPlayNetworking.registerGlobalReceiver(SeedPayload.TYPE, (payload, context) -> onSeed(payload));
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registries) -> dispatcher.register(
@@ -125,7 +125,8 @@ public final class SeedLodClient implements ClientModInitializer {
 
 	/** From the config screen: detail applies on the next plan, the rest restarts generation. */
 	static void apply(SeedLodConfig next) {
-		boolean restart = next.enabled != config.enabled || next.threadCount() != config.threadCount() || next.biomeBlend != config.biomeBlend;
+		boolean restart = next.enabled != config.enabled || next.threadCount() != config.threadCount()
+			|| next.biomeBlend != config.biomeBlend || next.structures != config.structures;
 		config = next;
 		next.save();
 		Session current = session;
@@ -139,6 +140,7 @@ public final class SeedLodClient implements ClientModInitializer {
 	}
 
 	private static void onSeed(SeedPayload payload) {
+		closeRemote();
 		rebuiltSeed = payload.seed();
 		remote = CompletableFuture.supplyAsync(() -> {
 			try {
@@ -148,6 +150,12 @@ public final class SeedLodClient implements ClientModInitializer {
 			}
 		}, Util.backgroundExecutor());
 		sessionLevel = null;  // retry starting now that the seed is here
+	}
+
+	private static void closeRemote() {
+		CompletableFuture<RebuiltWorldgen> prev = remote;
+		remote = null;
+		if (prev != null) prev.thenAccept(RebuiltWorldgen::close);
 	}
 
 	private static void stop() {

@@ -12,7 +12,7 @@
     "client": ["dev.winter.seedlod.client.SeedLodClient"],
     "modmenu": ["dev.winter.seedlod.client.ModMenuEntry"]
   },
-  "mixins": [{ "config": "seedlod.client.mixins.json", "environment": "client" }],
+  "mixins": ["seedlod.mixins.json", { "config": "seedlod.client.mixins.json", "environment": "client" }],
   "accessWidener": "seedlod.accesswidener",
   "depends": {
     "fabricloader": ">=0.20",

@@ -61,6 +61,7 @@ final class Session {
 	private final Path doneFile;
 	private final BooleanSupplier canWrite;
 	private final int biomeBlend;
+	private final boolean structures;
 	private final LodTree.RealChunks real;
 	/** No saved record yet: whether Voxy's data is all recorded is decided at the first plan, by looking. */
 	private boolean realUnknown = true;
@@ -87,6 +88,7 @@ final class Session {
 		this.doneFile = doneFile;
 		this.canWrite = canWrite;
 		this.biomeBlend = config.biomeBlend;
+		this.structures = config.structures;
 		this.engine.acquireRef();
 		this.real = LodTree.real(engine);
 		this.loadDone();
@@ -168,14 +170,17 @@ final class Session {
 
 	private void work() {
 		Niceness.lowerCurrentThread(10);
-		try (TileGen gen = new TileGen(this.view).withBiomeBlend(this.biomeBlend)) {
+		try (TileGen gen = new TileGen(this.view).withBiomeBlend(this.biomeBlend).withStructures(this.structures)) {
 			VoxyWriter writer = new VoxyWriter(this.engine);
 			while (!this.stopped) {
 				Job job = this.queue.poll();
 				if (job == null) {
-					// Out of work (a fill is done or waiting on the player): hand the memory back while idle.
-					gen.releaseScratch();
-					job = this.queue.take();
+					// Wait briefly before dropping scratch: replan() clears and refills the queue for a few ms.
+					job = this.queue.poll(2, TimeUnit.SECONDS);
+					if (job == null) {
+						gen.releaseScratch();
+						job = this.queue.take();
+					}
 				}
 				long key = key(job.lvl, job.groupX, job.groupZ);
 				synchronized (this.done) {
