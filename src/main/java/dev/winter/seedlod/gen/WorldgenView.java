@@ -14,11 +14,13 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
 import net.minecraft.world.level.levelgen.RandomState;
 import net.minecraft.world.level.levelgen.WorldGenerationContext;
 import net.minecraft.world.level.levelgen.placement.PlacedFeature;
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -41,13 +43,15 @@ public final class WorldgenView implements WorldgenContext {
 	public final long seed;
 	public final BiomeFeatures features;
 	public final BiomeTrees trees;
+	public final @Nullable Structures structures;
 	public final RegistryAccess registries;
 	/** The live level this was built from, or null when rebuilt on a client. */
 	public final @Nullable ServerLevel level;
 
 	/** @param features each biome's placed features per decoration step, as the server has them */
 	public WorldgenView(ResourceKey<Level> dimension, RandomState randomState, NoiseGeneratorSettings settings, ChunkGenerator generator, LevelHeightAccessor heightAccessor,
-		long seed, Function<Holder<Biome>, List<HolderSet<PlacedFeature>>> features, RegistryAccess registries, @Nullable ServerLevel level) {
+		long seed, Function<Holder<Biome>, List<HolderSet<PlacedFeature>>> features, RegistryAccess registries, @Nullable ServerLevel level,
+		@Nullable ChunkGeneratorStructureState structureState, @Nullable StructureTemplateManager structureTemplates) {
 		this.dimension = dimension;
 		this.randomState = randomState;
 		this.registries = registries;
@@ -57,6 +61,7 @@ public final class WorldgenView implements WorldgenContext {
 		BiomeSource biomes = generator.getBiomeSource();
 		this.features = new BiomeFeatures(biomes.possibleBiomes(), features);
 		this.trees = new BiomeTrees(this.features);
+		this.structures = structureState != null && structureTemplates != null ? new Structures(structureState, structureTemplates) : null;
 		this.settings = settings;
 		this.biomes = biomes;
 		this.genContext = new WorldGenerationContext(generator, heightAccessor);
@@ -72,7 +77,8 @@ public final class WorldgenView implements WorldgenContext {
 		ChunkGenerator generator = level.getChunkSource().getGenerator();
 		if (!(generator instanceof NoiseBasedChunkGenerator noise)) return null;
 		return new WorldgenView(level.dimension(), level.getChunkSource().randomState(), noise.generatorSettings().value(), generator, level, level.getSeed(),
-			biome -> biome.value().getGenerationSettings().features(), level.registryAccess(), level);
+			biome -> biome.value().getGenerationSettings().features(), level.registryAccess(), level,
+			level.getChunkSource().getGeneratorState(), level.getStructureTemplateManager());
 	}
 
 	@Override

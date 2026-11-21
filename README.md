@@ -13,6 +13,7 @@ does the same from the seed but isn't open source. Seed LOD is an open-source ta
   only sample cheaply at their own cell size.
 - Runs the dimension's material (surface) rules on the top voxels: grass, sand, snow, badlands bands, mod biomes.
 - Adds trees from each biome's own vegetation features (count, height, crown shape, leaf and log blocks).
+- Places surface structures (villages, mansions, pyramids, monuments, outposts, shipwrecks, end cities and mod structures) by baking each structure once into a 5-level mip pyramid cached across tiles and LOD levels, skipping underground structures.
 - Then, like vanilla's last decoration pass, freezes cold biomes: ice on open water, snow on the ground and tree tops.
 - Writes each area at the level of detail Voxy will draw it at, worked out from your window size, field of view and
   Voxy's subdivision setting, down to one block per voxel close up. It fans out from the player at full detail
@@ -39,6 +40,8 @@ Also in game: Mod Menu → Seed LOD (needs Cloth Config). Saving applies right a
 - `biomeBlend`: blocks that grass, leaf and water colours are dithered across biome borders (0-32, default 8, 0 is
   off). Voxy colours each voxel from one biome, so this is how borders blend instead of stepping. Wider reads
   smoother from afar and grainier up close. Applies to newly generated terrain; `/seedlod regen` redoes the rest.
+- `structures`: place surface structures in distant terrain (default true). Applies to newly generated terrain;
+  `/seedlod regen` redoes the rest.
 
 ## Commands
 

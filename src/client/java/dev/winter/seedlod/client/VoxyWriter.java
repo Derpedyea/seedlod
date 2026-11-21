@@ -1,6 +1,7 @@
 package dev.winter.seedlod.client;
 
 import dev.winter.seedlod.gen.Tile;
+import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
@@ -20,6 +21,7 @@ final class VoxyWriter {
 	private final Map<Holder<Biome>, Integer> biomeIds = new IdentityHashMap<>();
 	/** One section being built; a writer belongs to one worker thread. */
 	private final long[] data = new long[LodTree.VOXELS];
+	private final boolean[] ours = new boolean[32 * 32];
 
 	VoxyWriter(WorldEngine engine) {
 		this.engine = engine;
@@ -71,19 +73,25 @@ final class VoxyWriter {
 
 	/** Fills {@code out} with one section of the tile. Returns false when it's all air (nothing to draw). */
 	private boolean build(Tile tile, int sy, long[] out) {
+		int baseY = sy * 32 - tile.voxelMinY;
+		if (baseY >= tile.voxelsY) {
+			Arrays.fill(out, LodTree.UNWRITTEN);
+			return false;
+		}
 		boolean any = false;
 		for (int z = 0; z < 32; z++)
 			for (int x = 0; x < 32; x++) {
 				int biome = this.biomeId(tile.tints[x + z * 32]);
+				int colBase = (x + z * 32) * tile.voxelsY;
 				for (int ly = 0; ly < 32; ly++) {
-					int y = sy * 32 + ly - tile.voxelMinY;
+					int y = baseY + ly;
 					long id;
 					if (y < 0) {
 						id = Mapper.airWithLight(0);
 					} else if (y >= tile.voxelsY) {
-						id = Mapper.airWithLight(15);
+						id = LodTree.UNWRITTEN;
 					} else {
-						int i = tile.index(x, y, z);
+						int i = colBase + y;
 						BlockState state = tile.states[i];
 						if (state == null) {
 							id = Mapper.airWithLight(tile.light[i]);
@@ -121,7 +129,7 @@ final class VoxyWriter {
 				return;
 			}
 			int missing = ~children & 0xFF;
-			boolean[] ours = LodTree.ourColumns(this.real, lvl, x, z, raw);
+			boolean[] ours = LodTree.ourColumns(this.real, lvl, x, z, raw, this.ours);
 			for (int i = 0; i < LodTree.VOXELS; i++) {
 				int vx = i & 31, vz = (i >> 5) & 31, vy = i >> 10;
 				if (ours[i & 1023] || (missing & LodTree.childBit(vx >> 4, vy >> 4, vz >> 4)) != 0) raw[i] = data[i];
@@ -139,7 +147,7 @@ final class VoxyWriter {
 		WorldSection section = this.engine.acquire(0, x, y, z);
 		try {
 			long[] raw = section._unsafeGetRawDataArray();
-			boolean[] ours = LodTree.ourColumns(this.real, 0, x, z, raw);
+			boolean[] ours = LodTree.ourColumns(this.real, 0, x, z, raw, this.ours);
 			int delta = 0;
 			boolean changed = false;
 			for (int i = 0; i < LodTree.VOXELS; i++) {

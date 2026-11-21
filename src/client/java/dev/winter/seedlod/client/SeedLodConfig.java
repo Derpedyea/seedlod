@@ -27,6 +27,8 @@ public final class SeedLodConfig {
 	public int finestLevel = 0;
 	/** Blocks grass, leaf and water colours are dithered across biome borders; 0 keeps hard edges. */
 	public int biomeBlend = TileGen.DEFAULT_BIOME_BLEND;
+	/** Whether to place surface structures (villages, mansions, pyramids, monuments, end cities, etc.) in LODs. */
+	public boolean structures = true;
 
 	public static SeedLodConfig load() {
 		SeedLodConfig config = new SeedLodConfig();
@@ -62,6 +64,7 @@ public final class SeedLodConfig {
 		c.detail = this.detail;
 		c.finestLevel = this.finestLevel;
 		c.biomeBlend = this.biomeBlend;
+		c.structures = this.structures;
 		return c;
 	}
 

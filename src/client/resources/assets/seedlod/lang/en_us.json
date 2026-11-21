@@ -14,5 +14,7 @@
   "seedlod.config.biomeBlend": "Biome blend",
   "seedlod.config.biomeBlend.off": "Off",
   "seedlod.config.biomeBlend.value": "%s blocks",
-  "seedlod.config.biomeBlend.tooltip": "How far grass, leaf and water colours mix across biome borders, as a dithered band. Wider reads smoother from afar, grainier up close. Applies to terrain generated from now on; /seedlod regen redoes the rest."
+  "seedlod.config.biomeBlend.tooltip": "How far grass, leaf and water colours mix across biome borders, as a dithered band. Wider reads smoother from afar, grainier up close. Applies to terrain generated from now on; /seedlod regen redoes the rest.",
+  "seedlod.config.structures": "Structures",
+  "seedlod.config.structures.tooltip": "Generate surface structures (villages, mansions, pyramids, monuments, end cities and mod structures) in distant terrain. Applies to terrain generated from now on; /seedlod regen redoes the rest."
 }

@@ -4,9 +4,11 @@ import com.google.gson.JsonParser;
 import com.mojang.serialization.JsonOps;
 import dev.winter.seedlod.gen.WorldgenView;
 import dev.winter.seedlod.net.SeedPayload;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,15 +32,19 @@ import net.minecraft.server.packs.repository.ServerPacksSource;
 import net.minecraft.server.packs.resources.MultiPackResourceManager;
 import net.minecraft.tags.TagLoader;
 import net.minecraft.util.Util;
+import net.minecraft.util.datafix.DataFixers;
 import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.level.DataPackConfig;
 import net.minecraft.world.level.LevelHeightAccessor;
 import net.minecraft.world.level.WorldDataConfiguration;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.levelgen.RandomState;
 import net.minecraft.world.level.levelgen.placement.PlacedFeature;
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
+import net.minecraft.world.level.storage.LevelStorageSource;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -47,15 +53,20 @@ import org.jspecify.annotations.Nullable;
  * that. Server-only data packs or mods that patch worldgen at server start won't be seen, which is what the
  * fingerprint check catches.
  */
-final class RebuiltWorldgen {
+final class RebuiltWorldgen implements AutoCloseable {
 	private final HolderLookup.Provider registries;
 	private final RegistryAccess access;
+	private final MultiPackResourceManager resources;
+	private final @Nullable StructureTemplateManager structureTemplates;
 	private final Map<Holder<Biome>, List<HolderSet<PlacedFeature>>> features = new ConcurrentHashMap<>();
 	private final SeedPayload payload;
 
-	private RebuiltWorldgen(HolderLookup.Provider registries, RegistryAccess access, SeedPayload payload) {
+	private RebuiltWorldgen(HolderLookup.Provider registries, RegistryAccess access, MultiPackResourceManager resources,
+		@Nullable StructureTemplateManager structureTemplates, SeedPayload payload) {
 		this.registries = registries;
 		this.access = access;
+		this.resources = resources;
+		this.structureTemplates = structureTemplates;
 		this.payload = payload;
 	}
 
@@ -68,17 +79,45 @@ final class RebuiltWorldgen {
 		net.minecraft.server.MinecraftServer.configurePackRepository(packs,
 			new WorldDataConfiguration(new DataPackConfig(payload.enabledPacks(), payload.disabledPacks()), FeatureFlags.DEFAULT_FLAGS),
 			false, false);
-		try (MultiPackResourceManager resources = new MultiPackResourceManager(PackType.SERVER_DATA, packs.openAllSelected())) {
+		MultiPackResourceManager resources = new MultiPackResourceManager(PackType.SERVER_DATA, packs.openAllSelected());
+		try {
 			// Fabric's list, not vanilla's: mods add their own worldgen registries (lithostitched's noise configs) there.
 			LayeredRegistryAccess<RegistryLayer> layers = RegistryLayer.createRegistryAccess();
 			var staticTags = TagLoader.loadTagsForExistingRegistries(resources, layers.getLayer(RegistryLayer.STATIC));
 			List<HolderLookup.RegistryLookup<?>> context = TagLoader.buildUpdatedLookups(layers.getAccessForLoading(RegistryLayer.WORLD), staticTags);
 			RegistryAccess.Frozen world = RegistryDataLoader.load(resources, context, DynamicRegistries.getWorldRegistries(), Util.backgroundExecutor()).join();
 			List<HolderLookup.RegistryLookup<?>> all = Stream.concat(context.stream(), world.listRegistries()).toList();
-			return new RebuiltWorldgen(HolderLookup.Provider.create(all.stream()), layers.replaceFrom(RegistryLayer.WORLD, world).compositeAccess(), payload);
+			RegistryAccess composite = layers.replaceFrom(RegistryLayer.WORLD, world).compositeAccess();
+			StructureTemplateManager templates = null;
+			try (LevelStorageSource.LevelStorageAccess storage = LevelStorageSource.createDefault(emptyWorldPacks).createAccess("seedlod")) {
+				templates = new StructureTemplateManager(resources, storage, DataFixers.getDataFixer(), composite.lookupOrThrow(Registries.BLOCK));
+			} catch (IOException e) {
+				dev.winter.seedlod.SeedLod.LOG.warn("Seed LOD couldn't open structure templates; distant structures disabled for this server", e);
+			}
+			return new RebuiltWorldgen(HolderLookup.Provider.create(all.stream()), composite, resources, templates, payload);
+		} catch (Exception e) {
+			resources.close();
+			throw e;
 		} finally {
-			Files.deleteIfExists(emptyWorldPacks);
+			deleteTree(emptyWorldPacks);
 		}
+	}
+
+	private static void deleteTree(Path root) {
+		try (Stream<Path> walk = Files.walk(root)) {
+			walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+				try {
+					Files.deleteIfExists(p);
+				} catch (IOException ignored) {
+				}
+			});
+		} catch (IOException ignored) {
+		}
+	}
+
+	@Override
+	public void close() {
+		this.resources.close();
 	}
 
 	@Nullable WorldgenView view(String dimension, LevelHeightAccessor height) {
@@ -90,7 +129,10 @@ final class RebuiltWorldgen {
 		var settings = noise.generatorSettings().value();
 		RandomState random = RandomState.create(this.registries.lookupOrThrow(Registries.NOISE), this.payload.seed(), settings);
 		ResourceKey<net.minecraft.world.level.Level> key = ResourceKey.create(Registries.DIMENSION, Identifier.parse(dimension));
-		return new WorldgenView(key, random, settings, generator, height, this.payload.seed(), this::features, this.access, null);
+		ChunkGeneratorStructureState structureState = this.structureTemplates == null ? null
+			: generator.createState(this.registries.lookupOrThrow(Registries.STRUCTURE_SET), random, this.payload.seed());
+		return new WorldgenView(key, random, settings, generator, height, this.payload.seed(), this::features, this.access, null,
+			structureState, this.structureTemplates);
 	}
 
 	/** A biome's features as the server has them; the client's own where the server sent none. */
