@@ -59,6 +59,7 @@ final class VoxyWriter {
 	private static final int SKY_SECTIONS = 3;
 
 	private void writeTile(Tile tile) {
+		if (LodTree.allReal(this.real, tile.lvl, tile.tileX, tile.tileZ)) return;
 		int minSection = Math.floorDiv(tile.voxelMinY, 32);
 		int maxSection = Math.floorDiv(tile.voxelMinY + tile.voxelsY - 1, 32);
 		long[] data = this.data;
@@ -67,7 +68,7 @@ final class VoxyWriter {
 			boolean blocks = this.build(tile, sy, data);
 			if (blocks) highestSolid = sy;
 			else if (highestSolid == Integer.MIN_VALUE || sy > highestSolid + SKY_SECTIONS) continue;
-			this.place(tile.lvl, tile.tileX, sy, tile.tileZ, data, blocks);
+			this.place(tile.lvl, tile.tileX, sy, tile.tileZ, data);
 		}
 	}
 
@@ -107,12 +108,12 @@ final class VoxyWriter {
 	}
 
 	/**
-	 * Puts one section of ours into the tree. Our own leaves (anything above level 0 with no children) are replaced.
-	 * A section that already has children may hold real data: we replace what's ours (see
-	 * {@link LodTree#ourColumns}) and fill the octants nobody covers yet with upsampled children, so it can't show
+	 * Puts one section of ours into the tree, writing only into columns that belong to us (see
+	 * {@link LodTree#ourColumns}) so real chunks are never overwritten even where they are air. A section that already
+	 * has children also gets upsampled children for missing octants that have blocks in our columns, so it can't show
 	 * holes up close.
 	 */
-	private void place(int lvl, int x, int y, int z, long[] data, boolean blocks) {
+	private void place(int lvl, int x, int y, int z, long[] data) {
 		if (lvl == 0) {
 			this.placeLevel0(x, y, z, data);
 			return;
@@ -121,21 +122,36 @@ final class VoxyWriter {
 		try {
 			long[] raw = section._unsafeGetRawDataArray();
 			byte children = section.getNonEmptyChildren();
+			boolean[] ours = LodTree.ourColumns(this.real, lvl, x, z, raw, this.ours);
 			if (children == 0) {
-				System.arraycopy(data, 0, raw, 0, LodTree.VOXELS);
-				this.engine.markDirty(section, WorldEngine.UPDATE_TYPE_BLOCK_BIT, 0b111111);
+				boolean changed = false;
+				boolean hasOursBlocks = false;
+				for (int i = 0; i < LodTree.VOXELS; i++) {
+					if (!ours[i & 1023]) continue;
+					long next = data[i];
+					if (!Mapper.isAir(next)) hasOursBlocks = true;
+					if (raw[i] != next) {
+						raw[i] = next;
+						changed = true;
+					}
+				}
+				if (changed) this.engine.markDirty(section, WorldEngine.UPDATE_TYPE_BLOCK_BIT, 0b111111);
 				// Sky only lights its neighbours; as a child it would just be an empty node to visit.
-				if (blocks) this.linkToParents(section);
+				if (hasOursBlocks) this.linkToParents(section);
 				return;
 			}
-			int missing = ~children & 0xFF;
-			boolean[] ours = LodTree.ourColumns(this.real, lvl, x, z, raw, this.ours);
+			boolean changed = false;
 			for (int i = 0; i < LodTree.VOXELS; i++) {
-				int vx = i & 31, vz = (i >> 5) & 31, vy = i >> 10;
-				if (ours[i & 1023] || (missing & LodTree.childBit(vx >> 4, vy >> 4, vz >> 4)) != 0) raw[i] = data[i];
+				if (!ours[i & 1023]) continue;
+				long next = data[i];
+				if (raw[i] != next) {
+					raw[i] = next;
+					changed = true;
+				}
 			}
-			this.engine.markDirty(section, WorldEngine.UPDATE_TYPE_BLOCK_BIT, 0b111111);
-			LodTree.fillOctants(this.engine, section, data, missing);
+			if (changed) this.engine.markDirty(section, WorldEngine.UPDATE_TYPE_BLOCK_BIT, 0b111111);
+			int missing = ~children & 0xFF;
+			LodTree.fillOctants(this.engine, this.real, section, data, missing);
 			if (lvl == 1) LodTree.patchLevel0Children(this.engine, this.real, section, data, children);
 		} finally {
 			section.release();

@@ -188,12 +188,14 @@ final class Session {
 				}
 				this.busy.incrementAndGet();
 				try {
-					Tile[] group = gen.generateGroup(job.lvl, job.groupX, job.groupZ);
-					while (!this.canWrite.getAsBoolean() && !this.stopped) Thread.sleep(20);
-					if (this.stopped || !this.engine.isLive()) break;
-					writer.writeGroup(group);
-					gen.trimBuffers();
-					this.tilesDone.addAndGet(4);
+					if (!LodTree.allRealGroup(this.real, job.lvl, job.groupX, job.groupZ)) {
+						Tile[] group = gen.generateGroup(job.lvl, job.groupX, job.groupZ);
+						while (!this.canWrite.getAsBoolean() && !this.stopped) Thread.sleep(20);
+						if (this.stopped || !this.engine.isLive()) break;
+						writer.writeGroup(group);
+						gen.trimBuffers();
+						this.tilesDone.addAndGet(4);
+					}
 					synchronized (this.done) {
 						this.done.add(key);
 						this.dirty = true;
